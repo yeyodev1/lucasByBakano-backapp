@@ -13,7 +13,9 @@
     "compile": "tsc --watch",
     "start": "node dist/index.js",
     "seed:admin": "ts-node-dev --transpile-only src/scripts/seed-admin.ts",
-    "format": "prettier --write 'src/**/*.{ts,json,md}' 'api/**/*.ts'"
+    "format": "prettier --write 'src/**/*.{ts,json,md}' 'api/**/*.ts'",
+    "bot": "ts-node-dev --respawn --transpile-only src/scripts/telegram-polling.ts",
+    "telegram:webhook": "ts-node-dev --transpile-only src/scripts/telegram-webhook.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
