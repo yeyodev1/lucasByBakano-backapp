@@ -48,6 +48,14 @@ export interface EntornoMetrics {
   metaConectado: boolean;
   onboarding: string;
   animoBot: string;
+  // Lo que ya hizo el bot de Bakano (@BakanoAgencyBot) con este cliente: Lucas
+  // lo lee para no repetir ni contradecir lo que el cliente ya recibió.
+  bot: {
+    recordoPagoEn: Date | null;
+    alertoEquipoEn: Date | null;
+    alertaEstado: string;
+    ultimosMensajes: { rol: "cliente" | "bot"; texto: string; en: Date }[];
+  };
   // Cómo se encontró: por teléfono o correo es seguro; por nombre, hay que confirmar.
   coincidencia: "telegram" | "telefono" | "correo" | "nombre";
 }
@@ -131,7 +139,7 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
     if (!encontrados.size) return { estado: "sin_entorno", entornos: [] };
 
     const ids = [...encontrados.keys()].map((id) => new Types.ObjectId(id));
-    const [docs, animos] = await Promise.all([
+    const [docs, animos, chatsBot] = await Promise.all([
       workspaces
         .find(
           { _id: { $in: ids } },
@@ -158,7 +166,49 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
         .sort({ "ultimoAnimo.en": -1 })
         .limit(10)
         .toArray(),
+      chats
+        .find(
+          { workspaceId: { $in: ids } },
+          {
+            projection: {
+              workspaceId: 1,
+              avisoPagoEn: 1,
+              ultimaAlerta: 1,
+              historial: { $slice: -6 },
+              updatedAt: 1,
+            },
+          },
+        )
+        .sort({ updatedAt: -1 })
+        .limit(10)
+        .toArray(),
     ]);
+    const botPorEntorno = new Map<string, EntornoMetrics["bot"]>();
+    for (const c of chatsBot) {
+      const key = String(c.workspaceId);
+      const previo = botPorEntorno.get(key);
+      const actual: EntornoMetrics["bot"] = {
+        recordoPagoEn: c.avisoPagoEn ?? null,
+        alertoEquipoEn: c.ultimaAlerta?.en ?? null,
+        alertaEstado: c.ultimaAlerta?.estado ?? "",
+        ultimosMensajes: (c.historial ?? []).map((m: any) => ({
+          rol: m.rol === "cliente" ? "cliente" : "bot",
+          texto: String(m.texto ?? "").slice(0, 400),
+          en: m.en,
+        })),
+      };
+      // Varios chats del mismo entorno (dueño y colaboradores): se juntan.
+      if (!previo) botPorEntorno.set(key, actual);
+      else {
+        const masReciente = (a: Date | null, b: Date | null) =>
+          !a ? b : !b ? a : new Date(a) > new Date(b) ? a : b;
+        previo.recordoPagoEn = masReciente(previo.recordoPagoEn, actual.recordoPagoEn);
+        if (masReciente(previo.alertoEquipoEn, actual.alertoEquipoEn) === actual.alertoEquipoEn) {
+          previo.alertoEquipoEn = actual.alertoEquipoEn;
+          previo.alertaEstado = actual.alertaEstado || previo.alertaEstado;
+        }
+      }
+    }
     for (const c of animos) {
       const key = String(c.workspaceId);
       if (!animoPorEntorno.has(key) && c.ultimoAnimo?.estado) {
@@ -189,6 +239,12 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
       metaConectado: Boolean(w.metaAds?.pageName),
       onboarding: resumenOnboarding(w),
       animoBot: animoPorEntorno.get(String(w._id)) ?? "",
+      bot: botPorEntorno.get(String(w._id)) ?? {
+        recordoPagoEn: null,
+        alertoEquipoEn: null,
+        alertaEstado: "",
+        ultimosMensajes: [],
+      },
       coincidencia: encontrados.get(String(w._id)) ?? "nombre",
     }));
 
