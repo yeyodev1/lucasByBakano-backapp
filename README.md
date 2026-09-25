@@ -73,3 +73,11 @@ pnpm telegram:webhook --delete
 ```
 
 API de administración (Bearer de admin): `/api/clients`, `/api/conversations/:id`, `/api/settings/business`.
+
+### Coordinación con el bot de Bakano y avisos al equipo
+
+- **Roles:** @BakanoAgencyBot (metrics) es el único que les escribe a los clientes. Lucas solo habla con el equipo.
+- **Lucas lee de Metrics (solo lectura):** entorno activo/inactivo y motivo, ánimo detectado, si el bot ya le recordó el pago o ya alertó al equipo, y los últimos mensajes del cliente con el bot. Con eso no repite ni contradice lo que el cliente ya recibió.
+- **Cobros:** saldos y links de Stripe desde finanzas (`/cobros`, botón 💳 en la ficha).
+- **Avisos al equipo** (`/alertas`; en un grupo del equipo, `/alertasaqui`): cliente sin respuesta más de `LUCAS_SLA_MINUTOS` en Telegram Business (cron `/api/cron/lucas` cada 30 min, 8:00 a 20:00 Ecuador), mala atención detectada al revisar respuestas del asesor, cliente molesto o en riesgo, oportunidades y reclamos de cobro. El mismo aviso no se repite.
+
