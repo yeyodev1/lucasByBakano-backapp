@@ -51,6 +51,15 @@ export const env = {
   AI_MODEL: optional("AI_MODEL", "anthropic/claude-opus-5"),
   // Tope por llamada a la IA. Telegram reintenta si tardamos; el reintento se descarta.
   AI_LIMITE_MS: Number(optional("AI_LIMITE_MS", "120000")),
+  // Metrics (solo lectura): entornos de los clientes de Bakano. Vacío = Lucas funciona sin ese contexto.
+  METRICS_DB_URI: optional("METRICS_DB_URI", ""),
+  METRICS_DB_NAME: optional("METRICS_DB_NAME", "test"),
+  // Finanzas (finances-bakano-backapp): saldos y links de pago de Stripe. Mismo API y
+  // llave (x-metrics-key) que usa Metrics para el portal de facturación.
+  FINANCES_API_URL: optional("FINANCES_API_URL", ""),
+  FINANCES_PORTAL_KEY: optional("FINANCES_PORTAL_KEY", ""),
+  // A dónde vuelve el cliente después de pagar en Stripe.
+  PAGO_RETURN_URL: optional("PAGO_RETURN_URL", "https://bakano.ec"),
   // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
   LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
   // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
