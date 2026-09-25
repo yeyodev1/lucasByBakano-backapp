@@ -1,11 +1,6 @@
 import mongoose, { Schema, Types } from "mongoose";
 
-export const CONVERSATION_CHANNELS = [
-  "telegram_business",
-  "reenvio",
-  "captura",
-  "texto",
-] as const;
+export const CONVERSATION_CHANNELS = ["telegram_business", "reenvio", "captura", "texto"] as const;
 export type ConversationChannel = (typeof CONVERSATION_CHANNELS)[number];
 
 /**
@@ -41,5 +36,4 @@ const conversationSchema = new Schema<IConversation>(
 conversationSchema.index({ client: 1, lastMessageAt: -1 });
 
 export const Conversation =
-  mongoose.models.Conversation ||
-  mongoose.model<IConversation>("Conversation", conversationSchema);
+  mongoose.models.Conversation || mongoose.model<IConversation>("Conversation", conversationSchema);
