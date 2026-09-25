@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { dbConnect } from "../config/mongo";
 import { handleUpdate } from "../services/lucas.service";
+import { revisarSinRespuesta } from "../services/monitor.service";
 import {
   BOT_COMMANDS,
   callTelegram,
@@ -18,6 +19,18 @@ async function main() {
   await deleteWebhook();
   await callTelegram("setMyCommands", { commands: BOT_COMMANDS });
   console.log("Lucas escuchando en modo polling. Ctrl+C para salir.");
+
+  // En Vercel esto lo hace el cron cada 30 min; en local, cada 10.
+  setInterval(
+    () =>
+      revisarSinRespuesta()
+        .then(
+          (r) =>
+            r.avisos && console.log(`[monitor] ${r.avisos} aviso(s) de clientes sin respuesta`),
+        )
+        .catch((error) => console.error("[monitor]", error?.message ?? error)),
+    10 * 60_000,
+  );
 
   let offset = 0;
   for (;;) {
