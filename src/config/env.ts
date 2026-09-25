@@ -44,4 +44,18 @@ export const env = {
   CRON_SECRET: optional("CRON_SECRET", ""),
   TELEGRAM_BOT_TOKEN: optional("TELEGRAM_BOT_TOKEN", ""),
   TELEGRAM_WEBHOOK_SECRET: optional("TELEGRAM_WEBHOOK_SECRET", ""),
+  // Código que un miembro del equipo manda con /vincular para poder usar a Lucas.
+  TELEGRAM_LINK_CODE: optional("TELEGRAM_LINK_CODE", ""),
+  ANTHROPIC_API_KEY: optional("ANTHROPIC_API_KEY", ""),
+  ANTHROPIC_MODEL: optional("ANTHROPIC_MODEL", "claude-opus-5"),
+  ANTHROPIC_EFFORT: optional("ANTHROPIC_EFFORT", "medium") as
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max",
+  // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
+  LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
+  // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
+  LUCAS_CONVERSATION_GAP_HOURS: Number(optional("LUCAS_CONVERSATION_GAP_HOURS", "12")),
 } as const;
