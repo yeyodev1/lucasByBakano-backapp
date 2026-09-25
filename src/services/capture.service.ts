@@ -168,7 +168,7 @@ async function askForClient(
   if (pending.name)
     keyboard.push([{ text: `➕ Crear "${pending.name}"`, callback_data: "capnew" }]);
   const text = candidates.length
-    ? `Hay varios clientes que se llaman así. ¿De cuál es esta conversación?`
+    ? `Hay varios clientes que se llaman así. De cuál es esta conversación?`
     : `Leí ${pending.messages.length} mensajes pero no sé de qué cliente son. Respóndeme con /cliente <nombre o teléfono> o créalo con /nuevo <nombre> y la guardo ahí.`;
   await sendMessage(operator.telegramChatId, text, keyboard);
 }
