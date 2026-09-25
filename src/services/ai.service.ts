@@ -89,6 +89,22 @@ const extractionSchema = z.object({
 });
 export type ExtractedConversation = z.infer<typeof extractionSchema>;
 
+const teamAlertSchema = z.object({
+  level: z.enum(["ninguna", "aviso", "urgente"]),
+  category: z.enum([
+    "mala_atencion",
+    "cliente_molesto",
+    "cliente_en_riesgo",
+    "oportunidad",
+    "cobro",
+    "otro",
+  ]),
+  message: z
+    .string()
+    .describe("Qué pasa y qué hacer, en 1 o 2 frases, para el equipo. Vacío si level es ninguna."),
+});
+export type TeamAlert = z.infer<typeof teamAlertSchema>;
+
 const recommendationSchema = z.object({
   clientIntent: z.string(),
   summary: z.string(),
@@ -102,6 +118,7 @@ const recommendationSchema = z.object({
     company: z.string(),
     interests: z.array(z.string()),
   }),
+  teamAlert: teamAlertSchema,
 });
 export type Recommendation = z.infer<typeof recommendationSchema>;
 
@@ -146,6 +163,12 @@ Si el cliente ya está en Metrics (es o fue cliente de Bakano):
 - Inactivo por fin de contrato o pausa acordada: es una reactivación. Recuérdale lo logrado juntos y propone volver con algo concreto.
 - Si la coincidencia fue solo por nombre, trátalo con cuidado y avisa en alerts que hay que confirmar que es la misma persona.
 
+Coordinación con el bot de Bakano (@BakanoAgencyBot, el que atiende a los clientes por Telegram):
+- Tú nunca le escribes al cliente; el bot sí. Lo que el bot ya le dijo o le recordó está en <metrics>. No lo repitas ni lo contradigas.
+- Si el bot le recordó el pago en los últimos 3 días, no propongas volver a cobrar todavía salvo que el cliente saque el tema: dilo en alerts ("el bot ya le recordó el pago el …").
+- Si el bot ya alertó al equipo por el ánimo del cliente, el asesor debe saberlo antes de responder: va en alerts.
+- Si el cliente le pidió algo al bot que sigue sin resolverse, retómalo en la respuesta.
+
 Si en <cobros> aparece saldo pendiente con Bakano:
 - Nunca lo ignores: va en alerts con el monto y si hay facturas vencidas.
 - Cobrar también es parte de la relación. Si la conversación da pie (pregunta por el servicio, quiere retomar, pide algo nuevo, o el pendiente ya está vencido), al menos una opción lo menciona con naturalidad y respeto, sin sonar a cobrador: facilita el pago, no reclama.
@@ -160,6 +183,12 @@ Qué entregas:
 - clientIntent: qué quiere el cliente ahora mismo, en una frase.
 - nextStep: la acción concreta que debe hacer el asesor.
 - suggestedStage: la etapa del embudo que corresponde, o vacío si no está claro. Si ya es cliente activo en Metrics, "cliente".
+- teamAlert: si alguien del equipo (no solo el asesor que te consulta) necesita enterarse ya. level "ninguna" es lo normal; úsalo para lo que de verdad importa:
+  · mala_atencion: el equipo atendió mal en la conversación (respuestas groseras o secas, información falsa, prometió lo que no debía, ignoró lo que el cliente preguntó, lo dejó esperando mucho).
+  · cliente_molesto o cliente_en_riesgo: está enojado, amenaza con irse, compara con otra agencia, pide cancelar.
+  · oportunidad: quiere comprar más, trae un referido, está listo para cerrar algo grande.
+  · cobro: disputa un cobro o dice que pagó y no se refleja.
+  "urgente" solo si hay que actuar hoy. message dice qué pasa y qué hacer, sin adornos.
 - captured: solo datos nuevos del cliente que aparezcan en la conversación y no estén en la ficha. Vacío si no hay.
 
 Información del negocio (lo único que puedes afirmar sobre productos, precios y condiciones):
@@ -360,6 +389,16 @@ function formatMetrics(metrics: ContextoMetrics): string {
       `Meta Ads conectado: ${e.metaConectado ? "sí" : "no"}`,
       e.onboarding && `Onboarding: ${e.onboarding}`,
       e.animoBot && `Último ánimo detectado por el bot de Bakano: ${e.animoBot}`,
+      e.bot.recordoPagoEn &&
+        `El bot de Bakano le recordó el pago el ${formatDate(e.bot.recordoPagoEn)}`,
+      e.bot.alertoEquipoEn &&
+        `El bot de Bakano ya alertó al equipo (${e.bot.alertaEstado}) el ${formatDate(e.bot.alertoEquipoEn)}`,
+      e.bot.ultimosMensajes.length &&
+        `Últimos mensajes del cliente con el bot de Bakano:\n${e.bot.ultimosMensajes
+          .map(
+            (m) => `[${formatDate(m.en)}] ${m.rol === "cliente" ? "CLIENTE" : "BOT"}: ${m.texto}`,
+          )
+          .join("\n")}`,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -382,6 +421,44 @@ function formatCobros(cobros: CobroEntorno[]): string {
     }.\n${facturas.join("\n")}${c.stripeActivo ? "\nPuede pagar con tarjeta por link." : ""}`;
   });
   return `<cobros>\n${bloques.join("\n\n")}\n</cobros>`;
+}
+
+const REVIEW_SYSTEM = `Eres Lucas y supervisas cómo atiende el equipo comercial de Bakano (agencia de marketing en Ecuador) a sus clientes por chat.
+Te pasan el final de una conversación real. Decide si un líder del equipo necesita enterarse. Lo normal es que no: no marques detalles de estilo ni respuestas cortas pero correctas.
+
+Marca teamAlert solo si hay algo real:
+- mala_atencion: respuesta grosera, cortante o sarcástica; información falsa o contradictoria; promesas de resultados, descuentos o plazos que no se pueden cumplir; ignoró lo que el cliente preguntó; lo dejó esperando mucho tiempo sin explicación.
+- cliente_molesto o cliente_en_riesgo: el cliente está enojado, amenaza con irse o cancelar.
+- oportunidad: el cliente quiere comprar más o está listo para cerrar y nadie lo está aprovechando.
+- cobro: reclama un cobro o dice que pagó.
+level "urgente" solo si hay que actuar hoy. message: qué pasó y qué debería hacer el equipo, en 1 o 2 frases.`;
+
+/** Revisa la última respuesta del equipo en un chat real y dice si hay que avisar. */
+export async function reviewAttention(input: {
+  client: ClientDoc;
+  current: ConversationWithMessages;
+  teamName: string;
+}): Promise<TeamAlert> {
+  const { data } = await generarObjeto({
+    system: REVIEW_SYSTEM,
+    content: [
+      {
+        type: "text",
+        text: [
+          `Cliente: ${input.client.name}${input.client.company ? ` (${input.client.company})` : ""}, etapa ${input.client.stage}.`,
+          `Quien atiende: ${input.teamName}.`,
+          formatConversation(
+            { ...input.current, messages: input.current.messages.slice(-20) },
+            "conversacion",
+          ),
+          `Ahora es ${formatDate(new Date())}.`,
+        ].join("\n\n"),
+      },
+    ],
+    schema: teamAlertSchema,
+    name: "revision",
+  });
+  return data;
 }
 
 /** Qué responderle al cliente, con el contexto del CRM, de Metrics y del historial. */
