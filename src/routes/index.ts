@@ -5,6 +5,7 @@ import telegramRoutes from "./telegram.routes";
 import clientRoutes from "./client.routes";
 import conversationRoutes from "./conversation.routes";
 import settingRoutes from "./setting.routes";
+import cronRoutes from "./cron.routes";
 
 function routerApi(app: Application) {
   const router = express.Router();
@@ -16,6 +17,7 @@ function routerApi(app: Application) {
   router.use("/clients", clientRoutes);
   router.use("/conversations", conversationRoutes);
   router.use("/settings", settingRoutes);
+  router.use("/cron", cronRoutes);
 }
 
 export default routerApi;
