@@ -49,11 +49,7 @@ export const env = {
   ANTHROPIC_API_KEY: optional("ANTHROPIC_API_KEY", ""),
   ANTHROPIC_MODEL: optional("ANTHROPIC_MODEL", "claude-opus-5"),
   ANTHROPIC_EFFORT: optional("ANTHROPIC_EFFORT", "medium") as
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "max",
+    "low" | "medium" | "high" | "xhigh" | "max",
   // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
   LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
   // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
