@@ -46,10 +46,11 @@ export const env = {
   TELEGRAM_WEBHOOK_SECRET: optional("TELEGRAM_WEBHOOK_SECRET", ""),
   // Código que un miembro del equipo manda con /vincular para poder usar a Lucas.
   TELEGRAM_LINK_CODE: optional("TELEGRAM_LINK_CODE", ""),
-  ANTHROPIC_API_KEY: optional("ANTHROPIC_API_KEY", ""),
-  ANTHROPIC_MODEL: optional("ANTHROPIC_MODEL", "claude-opus-5"),
-  ANTHROPIC_EFFORT: optional("ANTHROPIC_EFFORT", "medium") as
-    "low" | "medium" | "high" | "xhigh" | "max",
+  // Vercel AI Gateway: en Vercel autentica solo por OIDC; fuera de Vercel usa la llave.
+  AI_GATEWAY_API_KEY: optional("AI_GATEWAY_API_KEY", ""),
+  AI_MODEL: optional("AI_MODEL", "anthropic/claude-opus-5"),
+  // Tope por llamada a la IA. Telegram reintenta si tardamos; el reintento se descarta.
+  AI_LIMITE_MS: Number(optional("AI_LIMITE_MS", "120000")),
   // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
   LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
   // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
