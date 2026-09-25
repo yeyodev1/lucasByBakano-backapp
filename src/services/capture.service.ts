@@ -3,7 +3,8 @@ import { Message } from "../models/message.model";
 import { TgInlineKeyboard, TgMessage } from "../types/telegram";
 import * as aiService from "./ai.service";
 import { ClientDoc, ClientIdentity, getClientById, resolveClient } from "./client.service";
-import { appendMessages, IncomingMessage } from "./conversation.service";
+import { avisarEquipo } from "./alert.service";
+import { appendMessages, getContext, IncomingMessage } from "./conversation.service";
 import { OperatorDoc, updateOperator } from "./operator.service";
 import { recommendForClient } from "./recommendation.service";
 import { downloadFile, escapeHtml, sendMessage, sendTyping } from "./telegram.service";
@@ -374,7 +375,10 @@ export async function handleBusinessMessage(
     ],
   });
 
-  if (fromTeam) return;
+  if (fromTeam) {
+    await revisarRespuestaDelEquipo(operator, client, previous);
+    return;
+  }
 
   // Un aviso por ráfaga: si el cliente ya venía escribiendo hace poco, no se repite.
   const recentFromClient =
@@ -387,4 +391,33 @@ export async function handleBusinessMessage(
     `💬 <b>${escapeHtml(client.name)}</b>${created ? " (nuevo en el CRM)" : ""} te escribió:\n<i>${escapeHtml(text.slice(0, 300))}</i>`,
     [[{ text: "💡 Sugerir respuesta", callback_data: `sug:${client._id}` }]],
   );
+}
+
+/**
+ * El asesor acaba de responder en su chat real: Lucas revisa cómo va la
+ * atención y avisa al equipo si algo está mal. Solo cuando esa respuesta
+ * contesta a un cliente (no en cada mensaje suelto del asesor), para no
+ * gastar IA en conversaciones que no lo necesitan.
+ */
+async function revisarRespuestaDelEquipo(
+  operator: OperatorDoc,
+  client: ClientDoc,
+  previous: { sender: string; sentAt: Date } | null,
+): Promise<void> {
+  if (previous?.sender !== "cliente") return;
+  try {
+    const { current } = await getContext(client._id, 0);
+    if (!current) return;
+    const alerta = await aiService.reviewAttention({ client, current, teamName: operator.name });
+    if (alerta.level === "ninguna" || !alerta.message) return;
+    await avisarEquipo({
+      clientId: client._id,
+      clientName: client.name,
+      category: alerta.category,
+      level: alerta.level,
+      text: `${alerta.message}\n\n(Chat de ${operator.name || "un asesor"} por Telegram.)`,
+    });
+  } catch (error: any) {
+    console.error("[lucas] revisión de atención:", error?.message ?? error);
+  }
 }
