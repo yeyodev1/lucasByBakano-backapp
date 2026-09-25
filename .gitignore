@@ -1,0 +1,15 @@
+node_modules
+dist
+.vercel
+*.local
+
+# Secretos: nunca. La plantilla .env.example sí se versiona.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
+
+# Este proyecto usa pnpm; un lock de npm hace que Vercel cambie de gestor.
+package-lock.json
