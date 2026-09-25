@@ -5,6 +5,8 @@ import * as aiService from "./ai.service";
 import { applyCapturedData, ClientDoc, getClientById } from "./client.service";
 import { countConversations, getContext, setConversationSummary } from "./conversation.service";
 import { OperatorDoc } from "./operator.service";
+import { CobroEntorno, cobroDeEntorno } from "./finances.service";
+import { ContextoMetrics, contextoDeCliente } from "./metrics.service";
 import { BUSINESS_KEY, getSetting } from "./setting.service";
 import { escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
@@ -22,13 +24,75 @@ export function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 
+/** Una línea con lo que dice Metrics: si ya es cliente de Bakano y en qué estado. */
+export function metricsLine(metrics: ContextoMetrics): string {
+  if (metrics.estado === "no_configurado") return "";
+  if (metrics.estado === "error") return "⚪ <i>Metrics no respondió: no sé si ya es cliente.</i>";
+  if (metrics.estado === "sin_entorno") return "⚪ Prospecto: no tiene entorno en Metrics";
+  return metrics.entornos
+    .map((e) => {
+      const estado = e.activo
+        ? "🟢 Entorno activo"
+        : `🔴 Entorno inactivo${e.desactivacion ? ` (${escapeHtml(e.desactivacion)})` : ""}`;
+      const duda =
+        e.coincidencia === "nombre" ? " · <i>coincide solo por nombre, confirmar</i>" : "";
+      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}`;
+    })
+    .join("\n");
+}
+
+/** Saldo con Bakano de cada entorno encontrado en Metrics. */
+export async function cobrosDeCliente(metrics: ContextoMetrics): Promise<CobroEntorno[]> {
+  if (metrics.estado !== "encontrado") return [];
+  const cobros = await Promise.all(metrics.entornos.slice(0, 3).map((e) => cobroDeEntorno(e.id)));
+  return cobros.filter((c): c is CobroEntorno => c !== null);
+}
+
+/** Línea de cobro para la ficha y la recomendación. */
+export function cobroLine(cobros: CobroEntorno[]): string {
+  return cobros
+    .filter((c) => c.saldoPendiente > 0)
+    .map(
+      (c) =>
+        `💰 Debe <b>$${c.saldoPendiente.toFixed(2)}</b> (${c.facturas.length} factura${
+          c.facturas.length === 1 ? "" : "s"
+        }${c.vencidas ? `, ${c.vencidas} vencida${c.vencidas === 1 ? "" : "s"}` : ""})`,
+    )
+    .join("\n");
+}
+
+/** Botones para generar el link de pago de cada entorno con saldo. */
+export function cobroKeyboard(cobros: CobroEntorno[]): TgInlineKeyboard {
+  return cobros
+    .filter((c) => c.saldoPendiente > 0 && c.stripeActivo)
+    .map((c) => [
+      {
+        text:
+          cobros.length > 1
+            ? `💳 Link de pago · ${c.cliente.slice(0, 30)}`
+            : "💳 Generar link de pago",
+        callback_data: `pagar:${c.workspaceId}`,
+      },
+    ]);
+}
+
 /** Ficha corta del cliente para mostrar en Telegram. */
-export async function clientCard(client: ClientDoc): Promise<string> {
-  const total = await countConversations(client._id);
+export async function clientCard(
+  client: ClientDoc,
+): Promise<{ html: string; keyboard: TgInlineKeyboard }> {
+  const [total, metrics] = await Promise.all([
+    countConversations(client._id),
+    contextoDeCliente(client),
+  ]);
+  const cobros = await cobrosDeCliente(metrics);
   const lines = [
     `👤 <b>${escapeHtml(client.name)}</b>${client.company ? ` · ${escapeHtml(client.company)}` : ""}`,
     `Etapa: <b>${stageLabel(client.stage)}</b> · ${total} conversación${total === 1 ? "" : "es"}`,
   ];
+  const enMetrics = metricsLine(metrics);
+  if (enMetrics) lines.push(enMetrics);
+  const deuda = cobroLine(cobros);
+  if (deuda) lines.push(deuda);
   if (client.phones.length) lines.push(`📱 ${client.phones.map(escapeHtml).join(", ")}`);
   if (client.email) lines.push(`✉️ ${escapeHtml(client.email)}`);
   if (client.telegramUsername) lines.push(`💬 @${escapeHtml(client.telegramUsername)}`);
@@ -39,7 +103,13 @@ export async function clientCard(client: ClientDoc): Promise<string> {
     lines.push("", "<b>Últimas notas</b>");
     for (const n of notes) lines.push(`• ${escapeHtml(n.text)}`);
   }
-  return lines.join("\n");
+  return {
+    html: lines.join("\n"),
+    keyboard: [
+      [{ text: "💡 Sugerir respuesta", callback_data: `sug:${client._id}` }],
+      ...cobroKeyboard(cobros),
+    ],
+  };
 }
 
 /**
@@ -64,7 +134,11 @@ export async function recommendForClient(params: {
     getSetting(BUSINESS_KEY),
     getContext(params.clientId, contextCount),
   ]);
-  const totalConversations = await countConversations(client._id);
+  const [totalConversations, metrics] = await Promise.all([
+    countConversations(client._id),
+    contextoDeCliente(client),
+  ]);
+  const cobros = await cobrosDeCliente(metrics);
 
   const { data, usage } = await aiService.recommendReply({
     business,
@@ -72,6 +146,8 @@ export async function recommendForClient(params: {
     totalConversations,
     current: context.current,
     previous: context.previous,
+    metrics,
+    cobros,
     instruction: params.instruction,
   });
 
@@ -110,38 +186,41 @@ export async function recommendForClient(params: {
 
   const lines: string[] = [];
   if (params.prefix) lines.push(params.prefix, "");
+  lines.push(`🧠 <b>${escapeHtml(client.name)}</b> · ${stageLabel(client.stage)}`);
+  const enMetrics = metricsLine(metrics);
+  if (enMetrics) lines.push(enMetrics);
+  const deuda = cobroLine(cobros);
+  if (deuda) lines.push(deuda);
   lines.push(
-    `🧠 <b>${escapeHtml(client.name)}</b> · ${stageLabel(client.stage)}`,
     `<i>Leí ${read} (de ${totalConversations}).</i>`,
     "",
     `<b>Qué quiere:</b> ${escapeHtml(data.clientIntent)}`,
     `<b>Situación:</b> ${escapeHtml(data.summary)}`,
   );
-  data.replies.forEach((reply, i) => {
-    lines.push(
-      "",
-      `💬 <b>Opción ${i + 1} · ${escapeHtml(reply.tone)}</b>`,
-      `<code>${escapeHtml(reply.text)}</code>`,
-    );
-  });
   if (data.nextStep) lines.push("", `➡️ <b>Siguiente paso:</b> ${escapeHtml(data.nextStep)}`);
   if (data.alerts.length) {
     lines.push("", "⚠️ <b>Ojo</b>");
     for (const alert of data.alerts) lines.push(`• ${escapeHtml(alert)}`);
   }
-  if (changes.length)
+  if (changes.length) {
     lines.push("", `📝 <i>CRM actualizado: ${escapeHtml(changes.join(", "))}</i>`);
-  lines.push("", "<i>Toca un texto para copiarlo.</i>");
+  }
+  await sendMessage(chatId, lines.join("\n"), cobroKeyboard(cobros));
 
-  const keyboard: TgInlineKeyboard = [
-    data.replies.map((_, i) => ({
-      text: `✅ Usé la ${i + 1}`,
-      callback_data: `usar:${suggestion._id}:${i}`,
-    })),
-    [{ text: "🔁 Otras opciones", callback_data: `sug:${client._id}` }],
-  ];
-
-  await sendMessage(chatId, lines.join("\n"), keyboard);
+  // Cada opción en su propio mensaje: se copia con un toque o se reenvía tal cual.
+  for (let i = 0; i < data.replies.length; i++) {
+    const reply = data.replies[i];
+    const isLast = i === data.replies.length - 1;
+    const keyboard: TgInlineKeyboard = [
+      [{ text: `✅ Usé esta`, callback_data: `usar:${suggestion._id}:${i}` }],
+    ];
+    if (isLast) keyboard.push([{ text: "🔁 Otras opciones", callback_data: `sug:${client._id}` }]);
+    await sendMessage(
+      chatId,
+      `💬 <b>${i + 1} · ${escapeHtml(reply.tone)}</b>\n<code>${escapeHtml(reply.text)}</code>`,
+      keyboard,
+    );
+  }
 }
 
 export async function markChosen(suggestionId: string, index: number): Promise<boolean> {
