@@ -60,6 +60,8 @@ export const env = {
   FINANCES_PORTAL_KEY: optional("FINANCES_PORTAL_KEY", ""),
   // A dónde vuelve el cliente después de pagar en Stripe.
   PAGO_RETURN_URL: optional("PAGO_RETURN_URL", "https://bakano.ec"),
+  // Minutos que un cliente puede esperar respuesta en Telegram Business antes de avisar al equipo.
+  LUCAS_SLA_MINUTOS: Number(optional("LUCAS_SLA_MINUTOS", "60")),
   // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
   LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
   // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
