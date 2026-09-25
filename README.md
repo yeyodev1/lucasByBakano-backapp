@@ -50,3 +50,26 @@ Variables de entorno (Vercel → Project → Settings → Environment Variables)
 ```bash
 vercel --prod
 ```
+
+## Lucas: bot de Telegram (@LucasByBakanoBot)
+
+Copiloto de ventas: lee conversaciones con clientes, las guarda en el CRM (Mongo) y recomienda qué responder con Claude.
+
+**Cómo le llegan las conversaciones**
+
+- Capturas de pantalla (WhatsApp, Instagram, etc.): Claude las transcribe, identifica al cliente y lo crea si no existe.
+- Texto pegado.
+- Mensajes reenviados de Telegram.
+- Telegram Business: el operador conecta el bot en Ajustes → Telegram Business → Chatbots y Lucas lee sus chats privados. Nunca le responde al cliente; solo avisa al operador.
+
+**Contexto:** cada operador elige cuántas conversaciones anteriores lee Lucas (`/contexto n`, o `/sugerir n` para una sola vez). Una conversación nueva empieza tras `LUCAS_CONVERSATION_GAP_HOURS` horas de silencio.
+
+**Acceso:** solo operadores vinculados con `/vincular <TELEGRAM_LINK_CODE>`.
+
+```bash
+pnpm bot                                   # local, modo polling (sin URL pública)
+pnpm telegram:webhook https://<backend>    # producción: registra el webhook y el menú
+pnpm telegram:webhook --delete
+```
+
+API de administración (Bearer de admin): `/api/clients`, `/api/conversations/:id`, `/api/settings/business`.
