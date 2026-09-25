@@ -1,11 +1,7 @@
 import { Types } from "mongoose";
 import { env } from "../config/env";
 import { CustomError } from "../errors/customError.error";
-import {
-  Conversation,
-  ConversationChannel,
-  IConversation,
-} from "../models/conversation.model";
+import { Conversation, ConversationChannel, IConversation } from "../models/conversation.model";
 import { IMessage, Message, MessageSender } from "../models/message.model";
 import { touchLastContact } from "./client.service";
 
