@@ -18,7 +18,7 @@
     "telegram:webhook": "ts-node-dev --transpile-only src/scripts/telegram-webhook.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0",
+    "ai": "^7.0.114",
     "axios": "^1.7.9",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
@@ -26,7 +26,8 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.9.5",
-    "resend": "^6.20.0"
+    "resend": "^6.20.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
