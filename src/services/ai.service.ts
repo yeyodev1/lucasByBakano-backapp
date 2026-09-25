@@ -1,55 +1,58 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
 import { env } from "../config/env";
 import { CustomError } from "../errors/customError.error";
 import { CLIENT_STAGES } from "../models/client.model";
 import type { ClientDoc } from "./client.service";
 import type { ConversationWithMessages } from "./conversation.service";
 
-let client: Anthropic | null = null;
+/**
+ * La IA de Lucas corre con el AI SDK sobre Vercel AI Gateway, igual que el bot
+ * de métricas: el modelo es un string "proveedor/modelo" (AI_MODEL) y se
+ * autentica con AI_GATEWAY_API_KEY (u OIDC en Vercel). Cambiar de modelo es
+ * cambiar AI_MODEL, sin tocar código.
+ *
+ * `ai` es solo ESM y se carga al primer uso, no al importar: si no carga en el
+ * runtime, falla solo la IA y no la función entera de la API.
+ */
 
-function getClient(): Anthropic {
-  if (!env.ANTHROPIC_API_KEY) {
-    throw new CustomError(
-      "Lucas no tiene cerebro todavía: falta ANTHROPIC_API_KEY en el .env",
-      503,
-    );
+type AiSdk = typeof import("ai");
+
+let aiSdk: Promise<AiSdk> | null = null;
+/**
+ * `import()` a secas lo compila TypeScript a `require()` (module commonjs) y en
+ * Vercel revienta con "require() of ES Module". El Function lo esconde del
+ * compilador, así que sigue siendo un import dinámico de verdad.
+ */
+const importarEsm = new Function("modulo", "return import(modulo)") as (
+  modulo: string,
+) => Promise<any>;
+
+async function traerAi(): Promise<AiSdk> {
+  try {
+    // El require literal es además lo que hace que Vercel empaquete "ai".
+    return require("ai") as AiSdk;
+  } catch (error: any) {
+    if (error?.code !== "ERR_REQUIRE_ESM" && !/ES Module/i.test(String(error?.message))) {
+      throw error;
+    }
+    return (await importarEsm("ai")) as AiSdk;
   }
-  client ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  return client;
 }
 
-export type ImageMediaType = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+function cargarAi(): Promise<AiSdk> {
+  aiSdk ??= traerAi().catch((error) => {
+    aiSdk = null;
+    throw error;
+  });
+  return aiSdk;
+}
 
 export interface CaptureInput {
-  images: { data: Buffer; mediaType: ImageMediaType }[];
+  images: { data: Buffer; mediaType: string }[];
   text?: string;
   // Pie de foto o texto del operador que acompaña la captura.
   hint?: string;
   operatorName: string;
-}
-
-export interface ExtractedConversation {
-  isConversation: boolean;
-  platform: string;
-  client: {
-    name: string;
-    phone: string;
-    email: string;
-    company: string;
-    username: string;
-  };
-  messages: { sender: "cliente" | "equipo"; senderName: string; text: string; time: string }[];
-  operatorInstruction: string;
-}
-
-export interface Recommendation {
-  clientIntent: string;
-  summary: string;
-  replies: { tone: string; text: string }[];
-  nextStep: string;
-  alerts: string[];
-  suggestedStage: string;
-  captured: { phone: string; email: string; company: string; interests: string[] };
 }
 
 export interface AiUsage {
@@ -60,79 +63,45 @@ export interface AiUsage {
 
 // ─── Esquemas de salida ───────────────────────────────────────────────────────
 
-const str = { type: "string" };
+const extractionSchema = z.object({
+  isConversation: z.boolean(),
+  platform: z
+    .string()
+    .describe("WhatsApp, Instagram, Telegram, Messenger, correo, etc. Vacío si no se sabe."),
+  client: z.object({
+    name: z.string(),
+    phone: z.string(),
+    email: z.string(),
+    company: z.string(),
+    username: z.string(),
+  }),
+  messages: z.array(
+    z.object({
+      sender: z.enum(["cliente", "equipo"]),
+      senderName: z.string(),
+      text: z.string(),
+      time: z.string(),
+    }),
+  ),
+  operatorInstruction: z.string(),
+});
+export type ExtractedConversation = z.infer<typeof extractionSchema>;
 
-const EXTRACTION_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["isConversation", "platform", "client", "messages", "operatorInstruction"],
-  properties: {
-    isConversation: { type: "boolean" },
-    platform: str,
-    client: {
-      type: "object",
-      additionalProperties: false,
-      required: ["name", "phone", "email", "company", "username"],
-      properties: { name: str, phone: str, email: str, company: str, username: str },
-    },
-    messages: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["sender", "senderName", "text", "time"],
-        properties: {
-          sender: { type: "string", enum: ["cliente", "equipo"] },
-          senderName: str,
-          text: str,
-          time: str,
-        },
-      },
-    },
-    operatorInstruction: str,
-  },
-};
-
-const RECOMMENDATION_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: [
-    "clientIntent",
-    "summary",
-    "replies",
-    "nextStep",
-    "alerts",
-    "suggestedStage",
-    "captured",
-  ],
-  properties: {
-    clientIntent: str,
-    summary: str,
-    replies: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["tone", "text"],
-        properties: { tone: str, text: str },
-      },
-    },
-    nextStep: str,
-    alerts: { type: "array", items: str },
-    suggestedStage: { type: "string", enum: [...CLIENT_STAGES, ""] },
-    captured: {
-      type: "object",
-      additionalProperties: false,
-      required: ["phone", "email", "company", "interests"],
-      properties: {
-        phone: str,
-        email: str,
-        company: str,
-        interests: { type: "array", items: str },
-      },
-    },
-  },
-};
+const recommendationSchema = z.object({
+  clientIntent: z.string(),
+  summary: z.string(),
+  replies: z.array(z.object({ tone: z.string(), text: z.string() })),
+  nextStep: z.string(),
+  alerts: z.array(z.string()),
+  suggestedStage: z.enum([...CLIENT_STAGES, ""]),
+  captured: z.object({
+    phone: z.string(),
+    email: z.string(),
+    company: z.string(),
+    interests: z.array(z.string()),
+  }),
+});
+export type Recommendation = z.infer<typeof recommendationSchema>;
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -151,7 +120,7 @@ const RECOMMENDATION_SYSTEM = `Eres Lucas, el copiloto comercial de un equipo en
 
 Cómo recomiendas:
 - Lees la ficha del CRM, el historial y la conversación actual antes de proponer nada. Usa lo que ya se sabe del cliente; no le hagas preguntar al cliente algo que ya dijo.
-- Escribes las respuestas listas para copiar y pegar en el chat: español neutro de Ecuador, cálido y directo, frases cortas, como escribe una persona por WhatsApp. Sin saludos repetidos si la conversación ya está en curso. Emojis con moderación y solo si el cliente los usa.
+- Escribes las respuestas listas para copiar y pegar en el chat: español neutro de Ecuador, cálido y directo, frases cortas, como escribe una persona por WhatsApp. Sin saludos repetidos si la conversación ya está en curso. Emojis con moderación y solo si el cliente los usa. Sin markdown.
 - Das de 2 a 3 opciones con tonos distintos (por ejemplo: cercana, directa, para cerrar). Cada una avanza la venta hacia un siguiente paso concreto: agendar, enviar propuesta, pedir un dato, cerrar.
 - Nunca inventas precios, plazos, descuentos ni promesas que no estén en la información del negocio o en el historial. Si hace falta un dato que no tienes, la respuesta lo pide o lo deja entre corchetes, por ejemplo [precio], y lo mencionas en alerts.
 - En alerts señalas riesgos: objeciones sin resolver, el cliente se está enfriando, pidió algo que no se le respondió, mensajes sin contestar hace días.
@@ -167,71 +136,61 @@ Información del negocio (lo único que puedes afirmar sobre productos, precios 
 
 // ─── Llamada común ────────────────────────────────────────────────────────────
 
-async function callStructured<T>(params: {
+type UserContent = (
+  { type: "text"; text: string } | { type: "image"; image: Buffer; mediaType: string }
+)[];
+
+async function generarObjeto<T>(params: {
   system: string;
-  content: Anthropic.Beta.BetaContentBlockParam[];
-  schema: Record<string, unknown>;
-  effort: "low" | "medium" | "high" | "xhigh" | "max";
+  content: UserContent;
+  schema: z.ZodType<T>;
+  name: string;
 }): Promise<{ data: T; usage: AiUsage }> {
-  let response: Anthropic.Beta.BetaMessage;
+  if (!env.AI_GATEWAY_API_KEY && !env.IS_VERCEL) {
+    throw new CustomError(
+      "Lucas no tiene cerebro todavía: falta AI_GATEWAY_API_KEY en el .env",
+      503,
+    );
+  }
+
+  const { generateText, Output, NoObjectGeneratedError } = await cargarAi();
+  const inicio = Date.now();
+
   try {
-    response = await getClient().beta.messages.create({
-      model: env.ANTHROPIC_MODEL,
-      max_tokens: 16000,
-      betas: ["server-side-fallback-2026-07-01"],
-      // Si el modelo declina por un falso positivo, la API reintenta con el modelo alterno recomendado.
-      fallbacks: "default",
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: params.effort,
-        format: { type: "json_schema", schema: params.schema },
-      },
-      system: [{ type: "text", text: params.system, cache_control: { type: "ephemeral" } }],
+    const result = await generateText({
+      model: env.AI_MODEL,
+      system: params.system,
       messages: [{ role: "user", content: params.content }],
+      output: Output.object({ schema: params.schema, name: params.name }),
+      abortSignal: AbortSignal.timeout(env.AI_LIMITE_MS),
     });
-  } catch (error) {
-    if (error instanceof Anthropic.AuthenticationError) {
-      throw new CustomError("La llave de Anthropic no es válida", 503);
+    console.log(
+      `[lucas ia] ${params.name} · ${env.AI_MODEL} · ${((Date.now() - inicio) / 1000).toFixed(1)} s`,
+    );
+    return {
+      data: result.output as T,
+      usage: {
+        model: env.AI_MODEL,
+        inputTokens: result.usage.inputTokens ?? 0,
+        outputTokens: result.usage.outputTokens ?? 0,
+      },
+    };
+  } catch (error: any) {
+    console.error(`[lucas ia] ${params.name}:`, error?.message || error);
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      throw new CustomError("Me tomó demasiado pensar. Intenta otra vez o usa /sugerir 0", 504);
     }
-    if (error instanceof Anthropic.RateLimitError) {
-      throw new CustomError("Lucas está saturado, intenta en un minuto", 429);
+    if (NoObjectGeneratedError.isInstance(error)) {
+      throw new CustomError("La IA devolvió una respuesta ilegible, intenta otra vez", 502);
     }
-    if (error instanceof Anthropic.APIError) {
-      throw new CustomError(`Error de la IA (${error.status}): ${error.message}`, 502);
+    const status = error?.statusCode ?? error?.status;
+    if (status === 401 || status === 403) {
+      throw new CustomError("La llave de AI Gateway no es válida", 503);
     }
-    throw error;
+    if (status === 402) throw new CustomError("AI Gateway se quedó sin crédito", 503);
+    if (status === 429) throw new CustomError("Lucas está saturado, intenta en un minuto", 429);
+    throw new CustomError("No pude pensar la respuesta, intenta otra vez", 502);
   }
-
-  if (response.stop_reason === "refusal") {
-    throw new CustomError("La IA no quiso procesar esta conversación", 422);
-  }
-  if (response.stop_reason === "max_tokens") {
-    throw new CustomError("La conversación es demasiado larga para leerla de una vez", 422);
-  }
-
-  const text = response.content
-    .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("");
-
-  let data: T;
-  try {
-    data = JSON.parse(text) as T;
-  } catch {
-    throw new CustomError("La IA devolvió una respuesta ilegible", 502);
-  }
-
-  return {
-    data,
-    usage: {
-      model: response.model,
-      inputTokens:
-        response.usage.input_tokens +
-        (response.usage.cache_read_input_tokens ?? 0) +
-        (response.usage.cache_creation_input_tokens ?? 0),
-      outputTokens: response.usage.output_tokens,
-    },
-  };
 }
 
 // ─── Casos de uso ─────────────────────────────────────────────────────────────
@@ -240,9 +199,10 @@ async function callStructured<T>(params: {
 export async function extractConversation(
   input: CaptureInput,
 ): Promise<{ data: ExtractedConversation; usage: AiUsage }> {
-  const content: Anthropic.Beta.BetaContentBlockParam[] = input.images.map((image) => ({
+  const content: UserContent = input.images.map((image) => ({
     type: "image",
-    source: { type: "base64", media_type: image.mediaType, data: image.data.toString("base64") },
+    image: image.data,
+    mediaType: image.mediaType,
   }));
 
   const parts: string[] = [];
@@ -255,12 +215,11 @@ export async function extractConversation(
   );
   content.push({ type: "text", text: parts.join("\n\n") });
 
-  return callStructured<ExtractedConversation>({
+  return generarObjeto({
     system: EXTRACTION_SYSTEM.replace("{operator}", input.operatorName || "el operador"),
     content,
-    schema: EXTRACTION_SCHEMA,
-    // Transcribir no requiere razonar mucho; se prioriza la velocidad.
-    effort: "low",
+    schema: extractionSchema,
+    name: "conversacion",
   });
 }
 
@@ -339,14 +298,14 @@ export async function recommendReply(input: {
   }
   sections.push("¿Qué le respondemos al cliente?");
 
-  return callStructured<Recommendation>({
+  return generarObjeto({
     system: RECOMMENDATION_SYSTEM.replace(
       "{business}",
       input.business ||
         "Todavía no se configuró. No afirmes precios ni condiciones; pídelos entre corchetes y avisa en alerts que falta configurar /negocio.",
     ),
     content: [{ type: "text", text: sections.join("\n\n") }],
-    schema: RECOMMENDATION_SCHEMA,
-    effort: env.ANTHROPIC_EFFORT,
+    schema: recommendationSchema,
+    name: "recomendacion",
   });
 }
