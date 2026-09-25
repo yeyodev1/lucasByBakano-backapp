@@ -184,7 +184,9 @@ async function findByIdentity(
   identity: ClientIdentity,
 ): Promise<{ client: ClientDoc | null; candidates: ClientDoc[] }> {
   if (identity.telegramUserId) {
-    const client = await Client.findOne({ telegramUserId: identity.telegramUserId }).lean<ClientDoc>();
+    const client = await Client.findOne({
+      telegramUserId: identity.telegramUserId,
+    }).lean<ClientDoc>();
     if (client) return { client, candidates: [] };
   }
   if (identity.phone) {
@@ -259,7 +261,12 @@ export async function applyCapturedData(
   }
   if (extra.summary) client.summary = extra.summary;
   // La etapa solo avanza sola desde "lead": moverla después es decisión del equipo.
-  if (extra.stage && isValidStage(extra.stage) && client.stage === "lead" && extra.stage !== "lead") {
+  if (
+    extra.stage &&
+    isValidStage(extra.stage) &&
+    client.stage === "lead" &&
+    extra.stage !== "lead"
+  ) {
     client.stage = extra.stage;
     changes.push(`etapa → ${extra.stage}`);
   }
