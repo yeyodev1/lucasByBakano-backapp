@@ -7,6 +7,7 @@ import { countConversations, getContext, setConversationSummary } from "./conver
 import { OperatorDoc } from "./operator.service";
 import { CobroEntorno, cobroDeEntorno } from "./finances.service";
 import { ContextoMetrics, contextoDeCliente } from "./metrics.service";
+import { avisarEquipo } from "./alert.service";
 import { BUSINESS_KEY, getSetting } from "./setting.service";
 import { escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
@@ -24,6 +25,14 @@ export function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 
+function haceCuanto(fecha: Date): string {
+  const horas = Math.round((Date.now() - new Date(fecha).getTime()) / 3_600_000);
+  if (horas < 1) return "hace un rato";
+  if (horas < 24) return `hace ${horas} h`;
+  const dias = Math.round(horas / 24);
+  return `hace ${dias} día${dias === 1 ? "" : "s"}`;
+}
+
 /** Una línea con lo que dice Metrics: si ya es cliente de Bakano y en qué estado. */
 export function metricsLine(metrics: ContextoMetrics): string {
   if (metrics.estado === "no_configurado") return "";
@@ -36,7 +45,16 @@ export function metricsLine(metrics: ContextoMetrics): string {
         : `🔴 Entorno inactivo${e.desactivacion ? ` (${escapeHtml(e.desactivacion)})` : ""}`;
       const duda =
         e.coincidencia === "nombre" ? " · <i>coincide solo por nombre, confirmar</i>" : "";
-      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}`;
+      const bot: string[] = [];
+      if (e.bot.recordoPagoEn) bot.push(`le recordó el pago ${haceCuanto(e.bot.recordoPagoEn)}`);
+      if (e.bot.alertoEquipoEn) {
+        bot.push(
+          `alertó al equipo (${escapeHtml(e.bot.alertaEstado)}) ${haceCuanto(e.bot.alertoEquipoEn)}`,
+        );
+      }
+      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}${
+        bot.length ? `\n🤖 <i>El bot de Bakano ${bot.join(" y ")}</i>` : ""
+      }`;
     })
     .join("\n");
 }
@@ -204,6 +222,21 @@ export async function recommendForClient(params: {
   }
   if (changes.length) {
     lines.push("", `📝 <i>CRM actualizado: ${escapeHtml(changes.join(", "))}</i>`);
+  }
+  if (data.teamAlert.level !== "ninguna" && data.teamAlert.message) {
+    const enviado = await avisarEquipo({
+      clientId: client._id,
+      clientName: client.name,
+      category: data.teamAlert.category,
+      level: data.teamAlert.level,
+      text: `${data.teamAlert.message}\n\n(Detectado al revisar el chat con ${operator.name || "un asesor"}.)`,
+    });
+    lines.push(
+      "",
+      enviado
+        ? `📣 <i>Avisé al equipo: ${escapeHtml(data.teamAlert.message)}</i>`
+        : `📣 <i>El equipo ya estaba avisado de esto.</i>`,
+    );
   }
   await sendMessage(chatId, lines.join("\n"), cobroKeyboard(cobros));
 
