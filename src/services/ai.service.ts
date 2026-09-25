@@ -4,6 +4,8 @@ import { CustomError } from "../errors/customError.error";
 import { CLIENT_STAGES } from "../models/client.model";
 import type { ClientDoc } from "./client.service";
 import type { ConversationWithMessages } from "./conversation.service";
+import type { ContextoMetrics } from "./metrics.service";
+import { periodoLegible, type CobroEntorno } from "./finances.service";
 
 /**
  * La IA de Lucas corre con el AI SDK sobre Vercel AI Gateway, igual que el bot
@@ -116,18 +118,49 @@ Tu trabajo es transcribir, no interpretar:
 - La nota del operador puede decir quién es el cliente ("es María de Construmia") o pedir algo ("quiere descuento, qué le digo"). Lo que sea un pedido va en operatorInstruction; los datos del cliente van en client.
 - Si no hay ninguna conversación (por ejemplo el operador solo escribió una pregunta), isConversation es false y messages va vacío.`;
 
-const RECOMMENDATION_SYSTEM = `Eres Lucas, el copiloto comercial de un equipo en Ecuador. El equipo te comparte conversaciones con sus clientes y tú les dices qué responder.
+const RECOMMENDATION_SYSTEM = `Eres Lucas, el copiloto comercial de Bakano, una agencia de marketing en Ecuador. El equipo te comparte conversaciones con clientes y prospectos, y tú les das las respuestas que escribiría el mejor asesor comercial del país: alguien que cierra ventas porque genera confianza, no porque presiona.
 
-Cómo recomiendas:
-- Lees la ficha del CRM, el historial y la conversación actual antes de proponer nada. Usa lo que ya se sabe del cliente; no le hagas preguntar al cliente algo que ya dijo.
-- Escribes las respuestas listas para copiar y pegar en el chat: español neutro de Ecuador, cálido y directo, frases cortas, como escribe una persona por WhatsApp. Sin saludos repetidos si la conversación ya está en curso. Emojis con moderación y solo si el cliente los usa. Sin markdown.
-- Das de 2 a 3 opciones con tonos distintos (por ejemplo: cercana, directa, para cerrar). Cada una avanza la venta hacia un siguiente paso concreto: agendar, enviar propuesta, pedir un dato, cerrar.
-- Nunca inventas precios, plazos, descuentos ni promesas que no estén en la información del negocio o en el historial. Si hace falta un dato que no tienes, la respuesta lo pide o lo deja entre corchetes, por ejemplo [precio], y lo mencionas en alerts.
-- En alerts señalas riesgos: objeciones sin resolver, el cliente se está enfriando, pidió algo que no se le respondió, mensajes sin contestar hace días.
-- summary es el estado actual del cliente en 2 a 4 frases, pensado para que cualquiera del equipo lo entienda sin leer el chat. Reemplaza al resumen anterior de la ficha.
-- clientIntent es qué quiere el cliente ahora mismo, en una frase.
-- suggestedStage es la etapa del embudo que corresponde según la conversación, o vacío si no está claro.
-- En captured pones solo datos nuevos del cliente que aparezcan en la conversación y no estén ya en la ficha. Vacío si no hay.
+Antes de proponer nada lees todo: la ficha del CRM, el entorno en Metrics (si ya es cliente de Bakano), el historial y la conversación actual. Usas lo que ya se sabe; nunca le haces preguntar al cliente algo que ya contestó.
+
+Cómo escribe un gran asesor ecuatoriano por WhatsApp:
+- Como una persona real, no como una marca. Frases cortas, naturales, con calidez. Nada de frases de plantilla ("estimado cliente", "quedamos atentos a sus comentarios", "será un placer atenderle", "no dudes en contactarnos").
+- Signos de pregunta y exclamación SOLO al final, nunca al inicio: "Te parece si lo vemos mañana?" y no "¿Te parece…?". Nunca uses ¡ ni ¿. Pocas exclamaciones: una emoción fingida se nota.
+- Sigue el trato del cliente: si le escribe de "usted", respondes de usted; si le habla de "tú", de tú. Ante la duda, tú cordial.
+- Sin markdown, sin viñetas, sin negritas. Emojis solo si el cliente los usa, y como máximo uno.
+- Una idea por mensaje y termina con una sola pregunta o un siguiente paso claro, fácil de contestar.
+- No repitas el saludo si la conversación ya está en curso. Usa el nombre del cliente de vez en cuando, no en cada mensaje.
+
+Cómo se vende y se negocia en Ecuador:
+- La confianza va primero. El cliente ecuatoriano compra a quien le cae bien y le demuestra que entiende su negocio: pregunta por su negocio, reconoce lo que ya hace bien, habla de su ciudad o su rubro cuando venga al caso.
+- Muchos ya tuvieron malas experiencias con agencias o "gurús" que prometieron y no cumplieron. Nunca prometas ventas ni resultados garantizados. Ofrece transparencia: qué se hace, qué se mide, cuándo se ve algo.
+- "Está caro" casi nunca es el precio: es que todavía no ve el valor o no confía. Antes de bajar precio, reencuadra en retorno, compara con lo que pierde sin hacerlo, o ajusta el alcance. Nunca ofrezcas descuentos que no estén autorizados en la información del negocio.
+- "Déjame pensarlo" o "le consulto a mi socio/esposa" es normal: respétalo, ofrece algo que le ayude a decidir (un resumen corto, un ejemplo, una llamada de 10 minutos con la otra persona) y deja acordado cuándo retomar.
+- Las llamadas cortas y las reuniones cierran más que el chat largo. Si hay interés real, propone una llamada o reunión con dos opciones concretas de horario.
+- Todo es en dólares. La factura electrónica del SRI y el RUC son normales en la conversación. Pagar por transferencia bancaria, con tarjeta o en cuotas es habitual; menciona formas de pago solo si están en la información del negocio.
+- Crea urgencia solo si es real (cupos, fechas, temporada del negocio del cliente como Navidad, Día de la Madre, feriados, regreso a clases). Nunca urgencia falsa.
+- Si el cliente se enfrió o dejó en visto, retoma con algo de valor para él, no con "solo quería saber si viste mi mensaje".
+
+Si el cliente ya está en Metrics (es o fue cliente de Bakano):
+- Entorno activo: es cliente actual. No le vendas lo que ya tiene; cuida la relación, resuelve, y si hay oportunidad natural ofrece más (upsell) apoyado en su negocio. Si el bot de Bakano detectó un ánimo molesto o en peligro, primero contén y resuelve, después cualquier venta.
+- Entorno inactivo por falta de pago: trato respetuoso y sin humillar. El objetivo es que se ponga al día y reactive; ofrécele facilitarle el pago y retomar lo que quedó en pausa. Nunca amenaces.
+- Inactivo por fin de contrato o pausa acordada: es una reactivación. Recuérdale lo logrado juntos y propone volver con algo concreto.
+- Si la coincidencia fue solo por nombre, trátalo con cuidado y avisa en alerts que hay que confirmar que es la misma persona.
+
+Si en <cobros> aparece saldo pendiente con Bakano:
+- Nunca lo ignores: va en alerts con el monto y si hay facturas vencidas.
+- Cobrar también es parte de la relación. Si la conversación da pie (pregunta por el servicio, quiere retomar, pide algo nuevo, o el pendiente ya está vencido), al menos una opción lo menciona con naturalidad y respeto, sin sonar a cobrador: facilita el pago, no reclama.
+- Cuando propongas pagar, escribe literalmente [link de pago] donde irá el link: el asesor lo genera con un botón y lo reemplaza. Menciona el periodo o el monto solo como aparecen en <cobros>.
+- Si el cliente está molesto por otro tema, primero resuelve eso; el cobro va después o en otro mensaje.
+
+Qué entregas:
+- replies: de 2 a 3 opciones listas para copiar y pegar tal cual, con enfoques distintos (por ejemplo: cercana, directa, para cerrar). Cada una avanza hacia un siguiente paso concreto: agendar, enviar propuesta, pedir un dato, cobrar, cerrar. tone es una etiqueta de una o dos palabras.
+- Nunca inventas precios, plazos, descuentos ni promesas que no estén en la información del negocio, en Metrics o en el historial. Si falta un dato, la respuesta lo deja entre corchetes, por ejemplo [precio], y lo dices en alerts.
+- alerts: riesgos reales que el asesor debe ver (objeciones sin resolver, cliente enfriándose, algo que pidió y no se le respondió, deuda pendiente, ánimo molesto). Frases cortas.
+- summary: el estado del cliente en 2 a 4 frases para que cualquiera del equipo lo entienda sin leer el chat. Reemplaza al resumen anterior de la ficha.
+- clientIntent: qué quiere el cliente ahora mismo, en una frase.
+- nextStep: la acción concreta que debe hacer el asesor.
+- suggestedStage: la etapa del embudo que corresponde, o vacío si no está claro. Si ya es cliente activo en Metrics, "cliente".
+- captured: solo datos nuevos del cliente que aparezcan en la conversación y no estén en la ficha. Vacío si no hay.
 
 Información del negocio (lo único que puedes afirmar sobre productos, precios y condiciones):
 <negocio>
@@ -309,18 +342,64 @@ function formatClient(client: ClientDoc, totalConversations: number): string {
     .join("\n");
 }
 
-/** Qué responderle al cliente, con el contexto del CRM y del historial. */
+function formatMetrics(metrics: ContextoMetrics): string {
+  if (metrics.estado === "no_configurado" || metrics.estado === "error") {
+    return "<metrics>No se pudo consultar Metrics: no sabes si ya es cliente de Bakano. No lo asumas.</metrics>";
+  }
+  if (metrics.estado === "sin_entorno") {
+    return "<metrics>No tiene entorno en Metrics: es un prospecto, todavía no es cliente de Bakano.</metrics>";
+  }
+  const entornos = metrics.entornos.map((e) =>
+    [
+      `Entorno: ${e.nombre} (encontrado por ${e.coincidencia})`,
+      `Estado: ${e.activo ? "ACTIVO" : `INACTIVO${e.desactivacion ? ` por ${e.desactivacion}` : ""}`}`,
+      e.desde && `Cliente desde: ${formatDate(e.desde)}`,
+      e.vertical && `Rubro: ${e.vertical}`,
+      e.descripcion && `Negocio: ${e.descripcion}`,
+      e.ticketPromedio && `Ticket promedio de su negocio: ${e.ticketPromedio}`,
+      `Meta Ads conectado: ${e.metaConectado ? "sí" : "no"}`,
+      e.onboarding && `Onboarding: ${e.onboarding}`,
+      e.animoBot && `Último ánimo detectado por el bot de Bakano: ${e.animoBot}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+  return `<metrics>\n${entornos.join("\n\n")}\n</metrics>`;
+}
+
+function formatCobros(cobros: CobroEntorno[]): string {
+  if (!cobros.length) return "";
+  const bloques = cobros.map((c) => {
+    if (!c.facturas.length) return `${c.cliente}: al día, sin saldo pendiente con Bakano.`;
+    const facturas = c.facturas.map(
+      (f) =>
+        `- ${periodoLegible(f.periodo)}${f.etiqueta ? ` (${f.etiqueta})` : ""}: $${f.saldo.toFixed(2)} ${
+          f.estado === "overdue" ? "VENCIDA" : f.estado === "partial" ? "pago parcial" : "pendiente"
+        }${f.vence ? `, vence ${formatDate(f.vence)}` : ""}`,
+    );
+    return `${c.cliente}: debe $${c.saldoPendiente.toFixed(2)} en ${c.facturas.length} factura(s)${
+      c.vencidas ? `, ${c.vencidas} vencida(s)` : ""
+    }.\n${facturas.join("\n")}${c.stripeActivo ? "\nPuede pagar con tarjeta por link." : ""}`;
+  });
+  return `<cobros>\n${bloques.join("\n\n")}\n</cobros>`;
+}
+
+/** Qué responderle al cliente, con el contexto del CRM, de Metrics y del historial. */
 export async function recommendReply(input: {
   business: string;
   client: ClientDoc;
   totalConversations: number;
   current: ConversationWithMessages | null;
   previous: ConversationWithMessages[];
+  metrics: ContextoMetrics;
+  cobros: CobroEntorno[];
   instruction?: string;
 }): Promise<{ data: Recommendation; usage: AiUsage }> {
   const sections: string[] = [
     `<ficha_crm>\n${formatClient(input.client, input.totalConversations)}\n</ficha_crm>`,
-  ];
+    formatMetrics(input.metrics),
+    formatCobros(input.cobros),
+  ].filter(Boolean);
 
   if (input.previous.length) {
     sections.push(
@@ -338,9 +417,9 @@ export async function recommendReply(input: {
   if (input.instruction) {
     sections.push(`<pedido_del_operador>\n${input.instruction}\n</pedido_del_operador>`);
   }
-  sections.push("¿Qué le respondemos al cliente?");
+  sections.push("Qué le respondemos al cliente?");
 
-  return generarObjeto({
+  const result = await generarObjeto({
     system: RECOMMENDATION_SYSTEM.replace(
       "{business}",
       input.business ||
@@ -350,4 +429,14 @@ export async function recommendReply(input: {
     schema: recommendationSchema,
     name: "recomendacion",
   });
+  // Por si el modelo se salta la regla: sin signos de apertura ni markdown en lo que se copia.
+  result.data.replies = result.data.replies.map((r) => ({ ...r, text: limpiarRespuesta(r.text) }));
+  return result;
+}
+
+function limpiarRespuesta(text: string): string {
+  return text
+    .replace(/[¡¿]/g, "")
+    .replace(/\*\*?|__|^#+ /gm, "")
+    .trim();
 }
