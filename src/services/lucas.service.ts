@@ -28,6 +28,7 @@ import {
   updateOperator,
 } from "./operator.service";
 import { clientCard, markChosen, recommendForClient, stageLabel } from "./recommendation.service";
+import { describirDestino, setAlertChat } from "./alert.service";
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { BUSINESS_KEY, getSetting, setSetting } from "./setting.service";
 import { answerCallback, escapeHtml, removeKeyboard, sendMessage } from "./telegram.service";
@@ -49,6 +50,7 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu copiloto de ventas. Leo tus conversacion
 /nota <i>texto</i>: nota en la ficha
 /etapa <i>etapa</i>: ${CLIENT_STAGES.join(", ")}
 /negocio <i>texto</i>: qué vendemos, precios y condiciones (sin esto no afirmo precios)
+/alertas: a dónde y cuándo aviso al equipo. Agrégame a un grupo del equipo y escribe ahí /alertasaqui para que los avisos lleguen al grupo
 /cobros: quién le debe a Bakano, con botón para generar el link de pago
 /soltar: dejar el cliente activo
 
@@ -88,13 +90,41 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
   }
 
   const message = update.message;
-  if (!message?.from || message.chat.type !== "private") return;
+  if (!message?.from) return;
+  // En grupos Lucas no conversa: solo acepta el registro del grupo de alertas.
+  if (message.chat.type !== "private") {
+    await handleGroupMessage(message).catch((error) => console.error("[lucas] grupo:", error));
+    return;
+  }
 
   try {
     await handlePrivateMessage(message);
   } catch (error) {
     await replyError(message.chat.id, error);
   }
+}
+
+/**
+ * /alertasaqui <código> en un grupo del equipo: desde ahí llegan los avisos
+ * (mala atención, clientes sin respuesta, clientes molestos, oportunidades).
+ */
+async function handleGroupMessage(message: TgMessage): Promise<void> {
+  const parsed = parseCommand(message.text?.trim() ?? "");
+  if (parsed?.command !== "alertasaqui") return;
+  const operator = await findOperator(message.from!.id);
+  const codigoOk = env.TELEGRAM_LINK_CODE && parsed.args === env.TELEGRAM_LINK_CODE;
+  if (!operator && !codigoOk) {
+    await sendMessage(
+      message.chat.id,
+      "Solo un operador vinculado a Lucas puede registrar este grupo.",
+    );
+    return;
+  }
+  await setAlertChat(message.chat.id, operator?.name ?? message.from!.first_name);
+  await sendMessage(
+    message.chat.id,
+    "📣 Listo, desde ahora aviso aquí al equipo: clientes sin respuesta, atención a revisar, clientes molestos o en riesgo, oportunidades y cobros.",
+  );
 }
 
 async function replyError(chatId: number, error: unknown): Promise<void> {
@@ -333,6 +363,20 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await sendMessage(chatId, "✅ Guardado. Desde ahora recomiendo con esta información.");
       return;
     }
+
+    case "alertas":
+      await sendMessage(
+        chatId,
+        `📣 Los avisos al equipo van ${await describirDestino()}.\n\nAviso cuando un cliente lleva más de ${env.LUCAS_SLA_MINUTOS} min sin respuesta, cuando veo mala atención, clientes molestos o en riesgo, oportunidades de venta y reclamos de cobro.`,
+      );
+      return;
+
+    case "alertasaqui":
+      await sendMessage(
+        chatId,
+        "Ese comando se usa dentro del grupo del equipo, después de agregarme al grupo.",
+      );
+      return;
 
     case "cobros":
       await listarDeudores(operator);
