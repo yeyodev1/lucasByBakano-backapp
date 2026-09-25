@@ -137,8 +137,27 @@ Información del negocio (lo único que puedes afirmar sobre productos, precios 
 // ─── Llamada común ────────────────────────────────────────────────────────────
 
 type UserContent = (
-  { type: "text"; text: string } | { type: "image"; image: Buffer; mediaType: string }
+  { type: "text"; text: string } | { type: "file"; data: Buffer; mediaType: string }
 )[];
+
+function rescatarObjeto<T>(texto: string | undefined, schema: z.ZodType<T>): T | null {
+  if (!texto) return null;
+  try {
+    let candidato = JSON.parse(texto);
+    // El envoltorio cambia ("input", "text"…): se quita mientras sea una sola clave con un objeto.
+    for (let i = 0; i < 2; i++) {
+      const r = schema.safeParse(candidato);
+      if (r.success) return r.data;
+      const claves = candidato && typeof candidato === "object" ? Object.keys(candidato) : [];
+      if (claves.length !== 1 || typeof candidato[claves[0]] !== "object") return null;
+      candidato = candidato[claves[0]];
+    }
+    const r = schema.safeParse(candidato);
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
 
 async function generarObjeto<T>(params: {
   system: string;
@@ -176,13 +195,36 @@ async function generarObjeto<T>(params: {
       },
     };
   } catch (error: any) {
-    console.error(`[lucas ia] ${params.name}:`, error?.message || error);
     if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      console.error(`[lucas ia] ${params.name}: se pasó de ${env.AI_LIMITE_MS} ms`);
       throw new CustomError("Me tomó demasiado pensar. Intenta otra vez o usa /sugerir 0", 504);
     }
     if (NoObjectGeneratedError.isInstance(error)) {
+      // Claude por el Gateway a veces devuelve el objeto envuelto ({"input": …} o {"text": …}).
+      // El contenido es bueno: se desenvuelve y se valida con el mismo esquema.
+      const rescatado = rescatarObjeto(error.text, params.schema);
+      if (rescatado) {
+        console.log(
+          `[lucas ia] ${params.name} · ${env.AI_MODEL} · ${((Date.now() - inicio) / 1000).toFixed(1)} s (desenvuelto)`,
+        );
+        return {
+          data: rescatado,
+          usage: {
+            model: env.AI_MODEL,
+            inputTokens: error.usage?.inputTokens ?? 0,
+            outputTokens: error.usage?.outputTokens ?? 0,
+          },
+        };
+      }
+      // Sin el texto crudo no hay forma de saber qué campo no calzó.
+      console.error(
+        `[lucas ia] ${params.name} texto crudo:`,
+        String(error.text ?? "").slice(0, 1500),
+        String((error.cause as any)?.message ?? "").slice(0, 800),
+      );
       throw new CustomError("La IA devolvió una respuesta ilegible, intenta otra vez", 502);
     }
+    console.error(`[lucas ia] ${params.name}:`, error?.message || error);
     const status = error?.statusCode ?? error?.status;
     if (status === 401 || status === 403) {
       throw new CustomError("La llave de AI Gateway no es válida", 503);
@@ -200,8 +242,8 @@ export async function extractConversation(
   input: CaptureInput,
 ): Promise<{ data: ExtractedConversation; usage: AiUsage }> {
   const content: UserContent = input.images.map((image) => ({
-    type: "image",
-    image: image.data,
+    type: "file",
+    data: image.data,
     mediaType: image.mediaType,
   }));
 
