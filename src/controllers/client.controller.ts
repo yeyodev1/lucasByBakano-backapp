@@ -68,8 +68,18 @@ export async function getClient(req: AuthRequest, res: Response, next: NextFunct
 export async function updateClient(req: AuthRequest, res: Response, next: NextFunction) {
   try {
     const id = String(req.params.id);
-    const { name, phones, email, company, telegramUsername, stage, source, interests, tags, summary } =
-      req.body ?? {};
+    const {
+      name,
+      phones,
+      email,
+      company,
+      telegramUsername,
+      stage,
+      source,
+      interests,
+      tags,
+      summary,
+    } = req.body ?? {};
     const patch: Record<string, unknown> = {};
     if (name !== undefined) patch.name = name;
     if (phones !== undefined) patch.phones = phones;
@@ -118,7 +128,10 @@ export async function listClientConversations(req: AuthRequest, res: Response, n
   try {
     const id = String(req.params.id);
     const { page } = req.query;
-    const result = await conversationService.listConversations(id, page !== undefined ? Number(page) : 1);
+    const result = await conversationService.listConversations(
+      id,
+      page !== undefined ? Number(page) : 1,
+    );
     res.status(200).json(result);
   } catch (error) {
     next(error);
