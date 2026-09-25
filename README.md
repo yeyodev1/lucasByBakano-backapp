@@ -53,7 +53,7 @@ vercel --prod
 
 ## Lucas: bot de Telegram (@LucasByBakanoBot)
 
-Copiloto de ventas: lee conversaciones con clientes, las guarda en el CRM (Mongo) y recomienda qué responder con Claude.
+Copiloto de ventas: lee conversaciones con clientes, las guarda en el CRM (Mongo) y recomienda qué responder. La IA corre con el AI SDK sobre Vercel AI Gateway (`AI_MODEL` = "proveedor/modelo", `AI_GATEWAY_API_KEY` en local, OIDC en Vercel), igual que el bot de métricas.
 
 **Cómo le llegan las conversaciones**
 
