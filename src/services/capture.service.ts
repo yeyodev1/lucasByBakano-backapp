@@ -30,7 +30,7 @@ export function readPendingCapture(operator: OperatorDoc): PendingCapture | null
   }
 }
 
-function mediaTypeFromPath(path: string): aiService.ImageMediaType {
+function mediaTypeFromPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase();
   if (ext === "png") return "image/png";
   if (ext === "webp") return "image/webp";
