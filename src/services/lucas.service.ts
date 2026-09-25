@@ -28,6 +28,7 @@ import {
   updateOperator,
 } from "./operator.service";
 import { clientCard, markChosen, recommendForClient, stageLabel } from "./recommendation.service";
+import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { BUSINESS_KEY, getSetting, setSetting } from "./setting.service";
 import { answerCallback, escapeHtml, removeKeyboard, sendMessage } from "./telegram.service";
 
@@ -48,7 +49,10 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu copiloto de ventas. Leo tus conversacion
 /nota <i>texto</i>: nota en la ficha
 /etapa <i>etapa</i>: ${CLIENT_STAGES.join(", ")}
 /negocio <i>texto</i>: qué vendemos, precios y condiciones (sin esto no afirmo precios)
-/soltar: dejar el cliente activo`;
+/cobros: quién le debe a Bakano, con botón para generar el link de pago
+/soltar: dejar el cliente activo
+
+Si el cliente ya está en Metrics te digo si su entorno está activo y si tiene saldo pendiente. Con el botón 💳 te genero el link de pago de Stripe y el mensaje listo para mandarle.`;
 
 /** Punto de entrada de cada update de Telegram (webhook o polling). */
 export async function handleUpdate(update: TgUpdate): Promise<void> {
@@ -198,7 +202,8 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
           await sendMessage(chatId, "Dime a quién busco: /cliente María o /cliente 0991234567");
           return;
         }
-        await sendMessage(chatId, await clientCard(await getClientById(operator.activeClientId)));
+        const card = await clientCard(await getClientById(operator.activeClientId));
+        await sendMessage(chatId, card.html, card.keyboard);
         return;
       }
       const results = await searchClients(args);
@@ -219,7 +224,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       }
       await sendMessage(
         chatId,
-        "Encontré varios. ¿Cuál?",
+        "Encontré varios. Cuál es?",
         results.map((c) => [
           {
             text: `${c.name}${c.company ? ` · ${c.company}` : ""} · ${stageLabel(c.stage)}`,
@@ -244,9 +249,8 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     case "ficha": {
       const clientId = await requireActiveClient(operator);
       if (!clientId) return;
-      await sendMessage(chatId, await clientCard(await getClientById(clientId)), [
-        [{ text: "💡 Sugerir respuesta", callback_data: `sug:${clientId}` }],
-      ]);
+      const card = await clientCard(await getClientById(clientId));
+      await sendMessage(chatId, card.html, card.keyboard);
       return;
     }
 
@@ -301,7 +305,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       if (!isValidStage(stage)) {
         await sendMessage(
           chatId,
-          "¿A qué etapa?",
+          "A qué etapa lo paso?",
           CLIENT_STAGES.map((s) => [{ text: stageLabel(s), callback_data: `stage:${s}` }]),
         );
         return;
@@ -330,6 +334,10 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       return;
     }
 
+    case "cobros":
+      await listarDeudores(operator);
+      return;
+
     case "soltar":
       await updateOperator(operator._id, { activeClientId: null, pendingAction: "" });
       await sendMessage(chatId, "Listo, sin cliente activo.");
@@ -352,9 +360,11 @@ async function selectClient(
   }
   await updateOperator(operator._id, { activeClientId: clientId });
   const card = await clientCard(await getClientById(clientId));
-  await sendMessage(operator.telegramChatId, `${prefix ? `${prefix}\n\n` : ""}${card}`, [
-    [{ text: "💡 Sugerir respuesta", callback_data: `sug:${clientId}` }],
-  ]);
+  await sendMessage(
+    operator.telegramChatId,
+    `${prefix ? `${prefix}\n\n` : ""}${card.html}`,
+    card.keyboard,
+  );
 }
 
 async function handleCallback(query: TgCallbackQuery): Promise<void> {
@@ -411,6 +421,17 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
           operator.telegramChatId,
           `✅ <b>${escapeHtml(client.name)}</b> ahora está en <b>${stageLabel(value)}</b>.`,
         );
+        return;
+      }
+      case "pagar": {
+        await answerCallback(query.id, "Revisando el saldo…");
+        await pedirLinkDePago(operator, value);
+        return;
+      }
+      case "pagarf": {
+        await answerCallback(query.id, "Generando link…");
+        const [workspaceId, invoiceId] = value.split(":");
+        await enviarLinkDePago(operator, workspaceId, invoiceId);
         return;
       }
       case "usar": {
