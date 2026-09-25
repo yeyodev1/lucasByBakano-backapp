@@ -21,6 +21,7 @@ export const BOT_COMMANDS = [
   { command: "contexto", description: "Conversaciones anteriores a leer: /contexto 3" },
   { command: "nota", description: "Agregar nota al cliente activo" },
   { command: "etapa", description: "Cambiar etapa del cliente activo" },
+  { command: "cobros", description: "Quién debe a Bakano y links de pago" },
   { command: "negocio", description: "Ver o cambiar lo que Lucas sabe del negocio" },
   { command: "soltar", description: "Dejar de trabajar con el cliente activo" },
   { command: "ayuda", description: "Cómo usar a Lucas" },
