@@ -10,7 +10,8 @@ export async function lucas(req: Request, res: Response, next: NextFunction) {
       return;
     }
     const resultado = await monitorService.revisarSinRespuesta();
-    res.status(200).json(resultado);
+    const avisosCrm = await monitorService.avisarHallazgosCrm();
+    res.status(200).json({ ...resultado, avisosCrm });
   } catch (error) {
     next(error);
   }
