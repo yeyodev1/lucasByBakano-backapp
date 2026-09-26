@@ -5,6 +5,7 @@ import { Conversation } from "../models/conversation.model";
 import { Message } from "../models/message.model";
 import { avisarEquipo } from "./alert.service";
 import { hallazgosDesde } from "./metrics.service";
+import { negocioPorEntorno } from "./negocio.service";
 
 /**
  * Revisa los chats reales (Telegram Business) y avisa al equipo cuando un
@@ -55,12 +56,13 @@ export async function revisarSinRespuesta(): Promise<{ revisadas: number; avisos
     if (!ultimo || ultimo.sender !== "cliente") continue;
 
     const cliente = await Client.findById(conversacion.client)
-      .select("name")
-      .lean<{ _id: Types.ObjectId; name: string }>();
+      .select("name negocio")
+      .lean<{ _id: Types.ObjectId; name: string; negocio: Types.ObjectId }>();
     if (!cliente) continue;
 
     const espera = ahora - new Date(ultimo.sentAt).getTime();
     const enviado = await avisarEquipo({
+      negocioId: cliente.negocio,
       clientId: cliente._id,
       clientName: cliente.name,
       category: "sin_respuesta",
@@ -106,22 +108,49 @@ export async function avisarHallazgosCrm(): Promise<number> {
         .filter(Boolean)
         .join("\n"),
     );
+    const negocio = await negocioPorEntorno(workspaceId);
+    const encabezado = `${lista.length} lead${lista.length === 1 ? "" : "s"} se ${lista.length === 1 ? "fue" : "fueron"} ayer${
+      cierres ? `, ${cierres} ${cierres === 1 ? "era" : "eran"} cierre casi solo` : ""
+    }:`;
+    let enviado = false;
+
+    // Al dueño del negocio, si usa a Lucas: sus leads, qué pasó y qué hacer.
+    if (negocio) {
+      enviado = await avisarEquipo({
+        negocioId: negocio._id,
+        clientId: null,
+        clientName: negocio.nombre,
+        category: "oportunidad",
+        level: cierres >= 2 ? "urgente" : "aviso",
+        text: [
+          `Revisé tu CRM: ${encabezado}`,
+          "",
+          ...lineas,
+          "",
+          "Retómalos hoy: todavía se pueden cerrar. Si quieres cerrar más de estas, en Bakanology está el curso de ventas.",
+        ].join("\n"),
+        dedupeKey: `crm:${clave}`,
+      });
+    }
+
+    // Al equipo de Bakano, para dar seguimiento.
     const avisado = lista.some((h) => h.avisadoClienteEn);
-    const enviado = await avisarEquipo({
+    const alEquipo = await avisarEquipo({
+      negocioId: null,
       clientId: null,
       clientName: lista[0].entorno,
       category: "oportunidad",
       level: cierres >= 2 ? "urgente" : "aviso",
       text: [
-        `Su CRM muestra ${lista.length} lead${lista.length === 1 ? "" : "s"} que se le fue${lista.length === 1 ? "" : "ron"} ayer${cierres ? `, ${cierres} era${cierres === 1 ? "" : "n"} cierre casi solo` : ""}:`,
+        `Su CRM muestra que ${encabezado}`,
         "",
         ...lineas,
         "",
-        avisado
-          ? "El bot de Bakano ya se lo avisó al cliente con el link a Bakanology. Denle seguimiento para que tome el curso de ventas."
+        avisado || negocio
+          ? "Ya se le avisó al cliente. Denle seguimiento para que tome el curso de ventas de Bakanology."
           : "Todavía no se le avisó al cliente: díganselo y recomiéndenle el curso de ventas de Bakanology.",
       ].join("\n"),
-      dedupeKey: `crm:${clave}`,
+      dedupeKey: `crm-bakano:${clave}`,
       keyboard: [
         [
           {
@@ -131,6 +160,7 @@ export async function avisarHallazgosCrm(): Promise<number> {
         ],
       ],
     });
+    enviado = enviado || alEquipo;
     if (enviado) avisos++;
   }
   return avisos;
