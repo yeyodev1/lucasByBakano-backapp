@@ -2,14 +2,11 @@ import { Types } from "mongoose";
 import { Suggestion } from "../models/suggestion.model";
 import { TgInlineKeyboard } from "../types/telegram";
 import * as aiService from "./ai.service";
+import { avisarEquipo } from "./alert.service";
 import { applyCapturedData, ClientDoc, getClientById } from "./client.service";
 import { countConversations, getContext, setConversationSummary } from "./conversation.service";
+import { contextoDeNegocio } from "./negocio.service";
 import { OperatorDoc } from "./operator.service";
-import { CobroEntorno, cobroDeEntorno } from "./finances.service";
-import { ContextoMetrics, contextoDeCliente } from "./metrics.service";
-import { avisarEquipo } from "./alert.service";
-import { linkIntegraciones } from "./crm.service";
-import { BUSINESS_KEY, getSetting } from "./setting.service";
 import { escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
 const STAGE_LABELS: Record<string, string> = {
@@ -18,7 +15,7 @@ const STAGE_LABELS: Record<string, string> = {
   interesado: "Interesado",
   propuesta: "Propuesta enviada",
   negociacion: "Negociación",
-  cliente: "Cliente",
+  cliente: "Compró",
   perdido: "Perdido",
 };
 
@@ -26,110 +23,42 @@ export function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? stage;
 }
 
-function haceCuanto(fecha: Date): string {
-  const horas = Math.round((Date.now() - new Date(fecha).getTime()) / 3_600_000);
-  if (horas < 1) return "hace un rato";
-  if (horas < 24) return `hace ${horas} h`;
-  const dias = Math.round(horas / 24);
-  return `hace ${dias} día${dias === 1 ? "" : "s"}`;
+const TEMPERATURA: Record<string, string> = {
+  frio: "🧊 Frío",
+  tibio: "🌤️ Tibio",
+  caliente: "🔥 Caliente",
+  listo_para_pagar: "💰 Listo para pagar",
+};
+
+export function temperaturaLabel(temperatura: string): string {
+  return TEMPERATURA[temperatura] ?? "";
 }
 
-/** Una línea con lo que dice Metrics: si ya es cliente de Bakano y en qué estado. */
-export function metricsLine(metrics: ContextoMetrics): string {
-  if (metrics.estado === "no_configurado") return "";
-  if (metrics.estado === "error") return "⚪ <i>Metrics no respondió: no sé si ya es cliente.</i>";
-  if (metrics.estado === "sin_entorno") return "⚪ Prospecto: no tiene entorno en Metrics";
-  return metrics.entornos
-    .map((e) => {
-      const estado = e.activo
-        ? "🟢 Entorno activo"
-        : `🔴 Entorno inactivo${e.desactivacion ? ` (${escapeHtml(e.desactivacion)})` : ""}`;
-      const duda =
-        e.coincidencia === "nombre" ? " · <i>coincide solo por nombre, confirmar</i>" : "";
-      const bot: string[] = [];
-      if (e.bot.recordoPagoEn) bot.push(`le recordó el pago ${haceCuanto(e.bot.recordoPagoEn)}`);
-      if (e.bot.alertoEquipoEn) {
-        bot.push(
-          `alertó al equipo (${escapeHtml(e.bot.alertaEstado)}) ${haceCuanto(e.bot.alertoEquipoEn)}`,
-        );
-      }
-      const crm = !e.crm
-        ? "\n🔌 <i>CRM sin conectar</i>"
-        : e.crm.estado !== "conectado"
-          ? "\n🔌 <i>CRM con error, hay que reconectarlo</i>"
-          : `\n🔌 CRM conectado · WhatsApp ${
-              e.crm.whatsapp === "conectado"
-                ? "✅"
-                : e.crm.whatsapp === "no_detectado"
-                  ? "❌ no detectado"
-                  : "❔"
-            }`;
-      const cierres = e.hallazgos.filter((h) => h.tipo === "cierre_casi_solo").length;
-      const perdidos = cierres
-        ? `\n🎯 <b>${cierres}</b> cierre${cierres === 1 ? "" : "s"} casi solo${cierres === 1 ? "" : "s"} sin cerrar esta semana`
-        : "";
-      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}${crm}${perdidos}${
-        bot.length ? `\n🤖 <i>El bot de Bakano ${bot.join(" y ")}</i>` : ""
-      }`;
-    })
-    .join("\n");
+/** Barra de 10 bloques: se lee de un vistazo en el celular. */
+export function barraCierre(probabilidad: number): string {
+  const llenos = Math.round(Math.max(0, Math.min(100, probabilidad)) / 10);
+  return `${"▰".repeat(llenos)}${"▱".repeat(10 - llenos)} ${probabilidad}%`;
 }
 
-/** Saldo con Bakano de cada entorno encontrado en Metrics. */
-export async function cobrosDeCliente(metrics: ContextoMetrics): Promise<CobroEntorno[]> {
-  if (metrics.estado !== "encontrado") return [];
-  const cobros = await Promise.all(metrics.entornos.slice(0, 3).map((e) => cobroDeEntorno(e.id)));
-  return cobros.filter((c): c is CobroEntorno => c !== null);
-}
-
-/** Línea de cobro para la ficha y la recomendación. */
-export function cobroLine(cobros: CobroEntorno[]): string {
-  return cobros
-    .filter((c) => c.saldoPendiente > 0)
-    .map(
-      (c) =>
-        `💰 Debe <b>$${c.saldoPendiente.toFixed(2)}</b> (${c.facturas.length} factura${
-          c.facturas.length === 1 ? "" : "s"
-        }${c.vencidas ? `, ${c.vencidas} vencida${c.vencidas === 1 ? "" : "s"}` : ""})`,
-    )
-    .join("\n");
-}
-
-/** Botones para generar el link de pago de cada entorno con saldo. */
-export function cobroKeyboard(cobros: CobroEntorno[]): TgInlineKeyboard {
-  return cobros
-    .filter((c) => c.saldoPendiente > 0 && c.stripeActivo)
-    .map((c) => [
-      {
-        text:
-          cobros.length > 1
-            ? `💳 Link de pago · ${c.cliente.slice(0, 30)}`
-            : "💳 Generar link de pago",
-        callback_data: `pagar:${c.workspaceId}`,
-      },
-    ]);
-}
-
-/** Ficha corta del cliente para mostrar en Telegram. */
+/** Ficha corta del lead para mostrar en Telegram. */
 export async function clientCard(
   client: ClientDoc,
 ): Promise<{ html: string; keyboard: TgInlineKeyboard }> {
-  const [total, metrics] = await Promise.all([
-    countConversations(client._id),
-    contextoDeCliente(client),
-  ]);
-  const cobros = await cobrosDeCliente(metrics);
+  const total = await countConversations(client._id);
   const lines = [
     `👤 <b>${escapeHtml(client.name)}</b>${client.company ? ` · ${escapeHtml(client.company)}` : ""}`,
     `Etapa: <b>${stageLabel(client.stage)}</b> · ${total} conversación${total === 1 ? "" : "es"}`,
   ];
-  const enMetrics = metricsLine(metrics);
-  if (enMetrics) lines.push(enMetrics);
-  const deuda = cobroLine(cobros);
-  if (deuda) lines.push(deuda);
+  if (client.cierre?.en) {
+    lines.push(
+      `${temperaturaLabel(client.cierre.temperatura)} · ${barraCierre(client.cierre.probabilidad)}`,
+    );
+    if (client.cierre.falta?.length) {
+      lines.push(`<i>Falta: ${escapeHtml(client.cierre.falta.join(", "))}</i>`);
+    }
+  }
   if (client.phones.length) lines.push(`📱 ${client.phones.map(escapeHtml).join(", ")}`);
   if (client.email) lines.push(`✉️ ${escapeHtml(client.email)}`);
-  if (client.telegramUsername) lines.push(`💬 @${escapeHtml(client.telegramUsername)}`);
   if (client.interests.length) lines.push(`🎯 ${client.interests.map(escapeHtml).join(", ")}`);
   if (client.summary) lines.push("", `<i>${escapeHtml(client.summary)}</i>`);
   const notes = client.notes.slice(-3);
@@ -139,25 +68,14 @@ export async function clientCard(
   }
   return {
     html: lines.join("\n"),
-    keyboard: [
-      [{ text: "💡 Sugerir respuesta", callback_data: `sug:${client._id}` }],
-      ...cobroKeyboard(cobros),
-      ...(metrics.estado === "encontrado"
-        ? metrics.entornos
-            .filter((e) => !e.crm || e.crm.estado !== "conectado")
-            .slice(0, 2)
-            .map((e) => [
-              { text: `🔌 Conectar CRM · ${e.nombre.slice(0, 30)}`, url: linkIntegraciones(e.id) },
-            ])
-        : []),
-    ],
+    keyboard: [[{ text: "💡 Qué le respondo", callback_data: `sug:${client._id}` }]],
   };
 }
 
 /**
- * Genera la recomendación, actualiza el CRM con lo capturado y se la manda
- * al operador. contextOverride permite /sugerir 0 o /sugerir 5 sin cambiar
- * la preferencia guardada.
+ * Genera la recomendación para cerrar la venta, actualiza la ficha del lead
+ * y se la manda a quien vende. contextOverride permite /sugerir 0 o
+ * /sugerir 5 sin cambiar la preferencia guardada.
  */
 export async function recommendForClient(params: {
   operator: OperatorDoc;
@@ -171,25 +89,19 @@ export async function recommendForClient(params: {
   await sendTyping(chatId);
 
   const contextCount = params.contextOverride ?? operator.contextConversations;
-  const [client, business, context] = await Promise.all([
-    getClientById(params.clientId),
-    getSetting(BUSINESS_KEY),
+  const [client, negocio, context] = await Promise.all([
+    getClientById(params.clientId, operator.negocio),
+    contextoDeNegocio(operator.negocio),
     getContext(params.clientId, contextCount),
   ]);
-  const [totalConversations, metrics] = await Promise.all([
-    countConversations(client._id),
-    contextoDeCliente(client),
-  ]);
-  const cobros = await cobrosDeCliente(metrics);
+  const totalConversations = await countConversations(client._id);
 
   const { data, usage } = await aiService.recommendReply({
-    business,
+    negocio,
     client,
     totalConversations,
     current: context.current,
     previous: context.previous,
-    metrics,
-    cobros,
     instruction: params.instruction,
   });
 
@@ -201,7 +113,15 @@ export async function recommendForClient(params: {
       company: data.captured.company,
       interests: data.captured.interests,
     },
-    { summary: data.summary, stage: data.suggestedStage },
+    {
+      summary: data.summary,
+      stage: data.suggestedStage,
+      cierre: {
+        probabilidad: data.cierre.probabilidad,
+        temperatura: data.cierre.temperatura,
+        falta: data.cierre.falta,
+      },
+    },
   );
   if (context.current) await setConversationSummary(context.current.conversation._id, data.summary);
 
@@ -228,16 +148,26 @@ export async function recommendForClient(params: {
 
   const lines: string[] = [];
   if (params.prefix) lines.push(params.prefix, "");
-  lines.push(`🧠 <b>${escapeHtml(client.name)}</b> · ${stageLabel(client.stage)}`);
-  const enMetrics = metricsLine(metrics);
-  if (enMetrics) lines.push(enMetrics);
-  const deuda = cobroLine(cobros);
-  if (deuda) lines.push(deuda);
   lines.push(
+    `🧠 <b>${escapeHtml(client.name)}</b> · ${stageLabel(client.stage)}`,
     `<i>Leí ${read} (de ${totalConversations}).</i>`,
+    "",
+    `<b>${temperaturaLabel(data.cierre.temperatura)}</b>  ${barraCierre(data.cierre.probabilidad)}`,
+    `<i>${escapeHtml(data.cierre.porQue)}</i>`,
+  );
+  if (data.cierre.falta.length) {
+    lines.push(`<b>Falta para cerrar:</b> ${escapeHtml(data.cierre.falta.join(", "))}`);
+  }
+  lines.push(
     "",
     `<b>Qué quiere:</b> ${escapeHtml(data.clientIntent)}`,
     `<b>Situación:</b> ${escapeHtml(data.summary)}`,
+  );
+  lines.push(
+    "",
+    data.pago.enviarAhora
+      ? `💳 <b>Es momento de mandarle el pago.</b> ${escapeHtml(data.pago.porQue)}`
+      : `⏳ <b>Todavía no mandes el pago.</b> ${escapeHtml(data.pago.porQue)}`,
   );
   if (data.nextStep) lines.push("", `➡️ <b>Siguiente paso:</b> ${escapeHtml(data.nextStep)}`);
   if (data.alerts.length) {
@@ -245,38 +175,42 @@ export async function recommendForClient(params: {
     for (const alert of data.alerts) lines.push(`• ${escapeHtml(alert)}`);
   }
   if (changes.length) {
-    lines.push("", `📝 <i>CRM actualizado: ${escapeHtml(changes.join(", "))}</i>`);
+    lines.push("", `📝 <i>Ficha actualizada: ${escapeHtml(changes.join(", "))}</i>`);
   }
-  if (data.teamAlert.level !== "ninguna" && data.teamAlert.message) {
+  if (data.teamAlert.level !== "ninguna" && data.teamAlert.message && operator.negocio) {
     const enviado = await avisarEquipo({
+      negocioId: operator.negocio,
       clientId: client._id,
       clientName: client.name,
       category: data.teamAlert.category,
       level: data.teamAlert.level,
-      text: `${data.teamAlert.message}\n\n(Detectado al revisar el chat con ${operator.name || "un asesor"}.)`,
+      text: `${data.teamAlert.message}\n\n(Visto en el chat que atiende ${operator.name || "un vendedor"}.)`,
     });
-    lines.push(
-      "",
-      enviado
-        ? `📣 <i>Avisé al equipo: ${escapeHtml(data.teamAlert.message)}</i>`
-        : `📣 <i>El equipo ya estaba avisado de esto.</i>`,
-    );
+    if (enviado)
+      lines.push("", `📣 <i>Le avisé al dueño: ${escapeHtml(data.teamAlert.message)}</i>`);
   }
-  await sendMessage(chatId, lines.join("\n"), cobroKeyboard(cobros));
+  await sendMessage(chatId, lines.join("\n"));
 
   // Cada opción en su propio mensaje: se copia con un toque o se reenvía tal cual.
-  for (let i = 0; i < data.replies.length; i++) {
-    const reply = data.replies[i];
-    const isLast = i === data.replies.length - 1;
-    const keyboard: TgInlineKeyboard = [
-      [{ text: `✅ Usé esta`, callback_data: `usar:${suggestion._id}:${i}` }],
-    ];
-    if (isLast) keyboard.push([{ text: "🔁 Otras opciones", callback_data: `sug:${client._id}` }]);
-    await sendMessage(
-      chatId,
-      `💬 <b>${i + 1} · ${escapeHtml(reply.tone)}</b>\n<code>${escapeHtml(reply.text)}</code>`,
-      keyboard,
-    );
+  const mensajes = data.replies.map((reply, i) => ({
+    titulo: `💬 <b>${i + 1} · ${escapeHtml(reply.tone)}</b>`,
+    texto: reply.text,
+    callback: `usar:${suggestion._id}:${i}`,
+  }));
+  if (data.pago.enviarAhora && data.pago.mensaje) {
+    mensajes.push({
+      titulo: "💳 <b>Mensaje de pago</b>",
+      texto: data.pago.mensaje,
+      callback: `usar:${suggestion._id}:pago`,
+    });
+  }
+  for (let i = 0; i < mensajes.length; i++) {
+    const m = mensajes[i];
+    const keyboard: TgInlineKeyboard = [[{ text: "✅ Usé esta", callback_data: m.callback }]];
+    if (i === mensajes.length - 1) {
+      keyboard.push([{ text: "🔁 Otras opciones", callback_data: `sug:${client._id}` }]);
+    }
+    await sendMessage(chatId, `${m.titulo}\n<code>${escapeHtml(m.texto)}</code>`, keyboard);
   }
 }
 
