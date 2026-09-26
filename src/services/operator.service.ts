@@ -16,12 +16,22 @@ export async function findByBusinessConnection(connectionId: string): Promise<Op
   }).lean<OperatorDoc>();
 }
 
-export async function linkOperator(user: TgUser, chatId: number): Promise<OperatorDoc> {
+export async function linkOperator(
+  user: TgUser,
+  chatId: number,
+  vinculo?: { negocio: Types.ObjectId | null; role: IOperator["role"] },
+): Promise<OperatorDoc> {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
   return Operator.findOneAndUpdate(
     { telegramUserId: user.id },
     {
-      $set: { telegramChatId: chatId, name, username: user.username ?? "", isActive: true },
+      $set: {
+        telegramChatId: chatId,
+        name,
+        username: user.username ?? "",
+        isActive: true,
+        ...(vinculo ? { negocio: vinculo.negocio, role: vinculo.role, activeClientId: null } : {}),
+      },
       $setOnInsert: { contextConversations: env.LUCAS_DEFAULT_CONTEXT },
     },
     { upsert: true, new: true },
@@ -33,7 +43,11 @@ export async function updateOperator(
   patch: Partial<
     Pick<
       IOperator,
-      "activeClientId" | "contextConversations" | "pendingAction" | "businessConnectionId"
+      | "activeClientId"
+      | "contextConversations"
+      | "pendingAction"
+      | "businessConnectionId"
+      | "negocio"
     >
   >,
 ): Promise<void> {
@@ -51,4 +65,10 @@ export async function setBusinessConnection(
     { $set: { businessConnectionId: enabled ? connectionId : "" } },
     { new: true },
   ).lean<OperatorDoc>();
+}
+
+/** El primero que se vincula a un negocio es su dueño; los siguientes, vendedores. */
+export async function rolParaNegocio(negocioId: Types.ObjectId): Promise<"dueno" | "vendedor"> {
+  const hayDueno = await Operator.exists({ negocio: negocioId, role: "dueno", isActive: true });
+  return hayDueno ? "vendedor" : "dueno";
 }
