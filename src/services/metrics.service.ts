@@ -56,8 +56,67 @@ export interface EntornoMetrics {
     alertaEstado: string;
     ultimosMensajes: { rol: "cliente" | "bot"; texto: string; en: Date }[];
   };
+  // CRM (GoHighLevel) del cliente conectado en Metrics → Integraciones.
+  crm: CrmEstado | null;
+  // Leads que el cliente dejó ir en los últimos días, según la revisión diaria del CRM.
+  hallazgos: HallazgoCrm[];
   // Cómo se encontró: por teléfono o correo es seguro; por nombre, hay que confirmar.
   coincidencia: "telegram" | "telefono" | "correo" | "nombre";
+}
+
+export interface CrmEstado {
+  estado: string;
+  whatsapp: "conectado" | "no_detectado" | "desconocido";
+  ultimaRevision: Date | null;
+  ultimoError: string;
+}
+
+export interface HallazgoCrm {
+  id: string;
+  workspaceId: string;
+  dia: string;
+  tipo: "cierre_casi_solo" | "lead_sin_respuesta" | "oportunidad_estancada";
+  canal: string;
+  contacto: { nombre: string; telefono: string; email: string };
+  resumen: string;
+  porQueEsCierre: string;
+  queHacer: string;
+  mensajeSugerido: string;
+  monto: number | null;
+  avisadoClienteEn: Date | null;
+  creadoEn: Date | null;
+}
+
+function aHallazgo(h: any): HallazgoCrm {
+  return {
+    id: String(h._id),
+    workspaceId: String(h.workspaceId),
+    dia: h.dia ?? "",
+    tipo: h.tipo,
+    canal: h.canal ?? "",
+    contacto: {
+      nombre: h.contacto?.nombre ?? "",
+      telefono: h.contacto?.telefono ?? "",
+      email: h.contacto?.email ?? "",
+    },
+    resumen: h.resumen ?? "",
+    porQueEsCierre: h.porQueEsCierre ?? "",
+    queHacer: h.queHacer ?? "",
+    mensajeSugerido: h.mensajeSugerido ?? "",
+    monto: typeof h.monto === "number" ? h.monto : null,
+    avisadoClienteEn: h.avisadoClienteEn ?? null,
+    creadoEn: h.createdAt ?? null,
+  };
+}
+
+function aCrm(c: any): CrmEstado | null {
+  if (!c) return null;
+  return {
+    estado: c.estado ?? "",
+    whatsapp: c.whatsapp ?? "desconocido",
+    ultimaRevision: c.ultimaRevision ?? null,
+    ultimoError: c.ultimoError ?? "",
+  };
 }
 
 export interface ContextoMetrics {
@@ -139,7 +198,8 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
     if (!encontrados.size) return { estado: "sin_entorno", entornos: [] };
 
     const ids = [...encontrados.keys()].map((id) => new Types.ObjectId(id));
-    const [docs, animos, chatsBot] = await Promise.all([
+    const hace7Dias = new Date(Date.now() - 7 * 24 * 3_600_000);
+    const [docs, animos, chatsBot, crms, hallazgos] = await Promise.all([
       workspaces
         .find(
           { _id: { $in: ids } },
@@ -181,6 +241,16 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
         )
         .sort({ updatedAt: -1 })
         .limit(10)
+        .toArray(),
+      db
+        .collection("crmintegrations")
+        .find({ workspaceId: { $in: ids } }, { projection: { tokenCifrado: 0 } })
+        .toArray(),
+      db
+        .collection("crmhallazgos")
+        .find({ workspaceId: { $in: ids }, createdAt: { $gt: hace7Dias } })
+        .sort({ createdAt: -1 })
+        .limit(15)
         .toArray(),
     ]);
     const botPorEntorno = new Map<string, EntornoMetrics["bot"]>();
@@ -245,6 +315,10 @@ export async function contextoDeCliente(client: ClientDoc): Promise<ContextoMetr
         alertaEstado: "",
         ultimosMensajes: [],
       },
+      crm: aCrm(crms.find((c: any) => String(c.workspaceId) === String(w._id))),
+      hallazgos: hallazgos
+        .filter((h: any) => String(h.workspaceId) === String(w._id))
+        .map(aHallazgo),
       coincidencia: encontrados.get(String(w._id)) ?? "nombre",
     }));
 
@@ -280,4 +354,66 @@ export async function entornoPorId(
     .collection("workspaces")
     .findOne({ _id: new Types.ObjectId(id) }, { projection: { name: 1, isActive: 1 } });
   return w ? { id, nombre: w.name ?? "", activo: Boolean(w.isActive) } : null;
+}
+
+/** Hallazgos del CRM creados desde una fecha, con el nombre del entorno. */
+export async function hallazgosDesde(desde: Date): Promise<(HallazgoCrm & { entorno: string })[]> {
+  if (!env.METRICS_DB_URI) return [];
+  const db = (await conectar()).db!;
+  const docs = await db
+    .collection("crmhallazgos")
+    .find({ createdAt: { $gt: desde } })
+    .sort({ createdAt: 1 })
+    .limit(300)
+    .toArray();
+  if (!docs.length) return [];
+  const ids = [...new Set(docs.map((d: any) => String(d.workspaceId)))].map(
+    (id) => new Types.ObjectId(id),
+  );
+  const nombres = new Map(
+    (
+      await db
+        .collection("workspaces")
+        .find({ _id: { $in: ids } }, { projection: { name: 1 } })
+        .toArray()
+    ).map((w: any) => [String(w._id), w.name ?? ""]),
+  );
+  return docs.map((d: any) => ({
+    ...aHallazgo(d),
+    entorno: nombres.get(String(d.workspaceId)) ?? "",
+  }));
+}
+
+/** Estado del CRM de todos los entornos activos (para /crm). */
+export async function estadoCrmEntornos(): Promise<
+  { id: string; nombre: string; crm: CrmEstado | null; hallazgosSemana: number }[]
+> {
+  if (!env.METRICS_DB_URI) return [];
+  const db = (await conectar()).db!;
+  const hace7Dias = new Date(Date.now() - 7 * 24 * 3_600_000);
+  const [entornos, crms, conteos] = await Promise.all([
+    db
+      .collection("workspaces")
+      .find({ isActive: true }, { projection: { name: 1 } })
+      .toArray(),
+    db
+      .collection("crmintegrations")
+      .find({}, { projection: { tokenCifrado: 0 } })
+      .toArray(),
+    db
+      .collection("crmhallazgos")
+      .aggregate([
+        { $match: { createdAt: { $gt: hace7Dias } } },
+        { $group: { _id: "$workspaceId", n: { $sum: 1 } } },
+      ])
+      .toArray(),
+  ]);
+  const crmPor = new Map(crms.map((c: any) => [String(c.workspaceId), aCrm(c)]));
+  const conteoPor = new Map(conteos.map((c: any) => [String(c._id), c.n as number]));
+  return entornos.map((w: any) => ({
+    id: String(w._id),
+    nombre: w.name ?? "",
+    crm: crmPor.get(String(w._id)) ?? null,
+    hallazgosSemana: conteoPor.get(String(w._id)) ?? 0,
+  }));
 }
