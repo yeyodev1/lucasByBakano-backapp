@@ -169,6 +169,10 @@ Coordinación con el bot de Bakano (@BakanoAgencyBot, el que atiende a los clien
 - Si el bot ya alertó al equipo por el ánimo del cliente, el asesor debe saberlo antes de responder: va en alerts.
 - Si el cliente le pidió algo al bot que sigue sin resolverse, retómalo en la respuesta.
 
+CRM del cliente de Bakano (su GoHighLevel con WhatsApp):
+- Si no tiene el CRM conectado o no tiene WhatsApp en el CRM, Bakano no puede revisar sus conversaciones: si viene al caso, que el asesor le ofrezca conectarlo desde Integraciones en Metrics (lo puede hacer el equipo por él).
+- Si hay leads que dejó ir (cierres casi solos), úsalo con tacto: es el mejor argumento para que tome el curso de ventas de Bakanology y para mostrarle que la publicidad sí trae gente lista para comprar. Nunca lo hagas sentir mal.
+
 Si en <cobros> aparece saldo pendiente con Bakano:
 - Nunca lo ignores: va en alerts con el monto y si hay facturas vencidas.
 - Cobrar también es parte de la relación. Si la conversación da pie (pregunta por el servicio, quiere retomar, pide algo nuevo, o el pendiente ya está vencido), al menos una opción lo menciona con naturalidad y respeto, sin sonar a cobrador: facilita el pago, no reclama.
@@ -389,6 +393,18 @@ function formatMetrics(metrics: ContextoMetrics): string {
       `Meta Ads conectado: ${e.metaConectado ? "sí" : "no"}`,
       e.onboarding && `Onboarding: ${e.onboarding}`,
       e.animoBot && `Último ánimo detectado por el bot de Bakano: ${e.animoBot}`,
+      e.crm
+        ? `CRM (GoHighLevel): ${e.crm.estado}${e.crm.estado === "error" && e.crm.ultimoError ? ` (${e.crm.ultimoError})` : ""}, WhatsApp en el CRM: ${e.crm.whatsapp}`
+        : "CRM (GoHighLevel): no conectado en Integraciones de Metrics",
+      e.hallazgos.length &&
+        `Leads que el cliente dejó ir (revisión diaria de su CRM, últimos 7 días):\n${e.hallazgos
+          .map(
+            (h) =>
+              `- ${h.dia} ${h.tipo.replace(/_/g, " ")} · ${h.contacto.nombre || "sin nombre"}${h.monto ? ` · $${h.monto}` : ""}: ${h.resumen}${
+                h.avisadoClienteEn ? " (el bot ya se lo avisó al cliente)" : ""
+              }`,
+          )
+          .join("\n")}`,
       e.bot.recordoPagoEn &&
         `El bot de Bakano le recordó el pago el ${formatDate(e.bot.recordoPagoEn)}`,
       e.bot.alertoEquipoEn &&
