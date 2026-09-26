@@ -19,6 +19,8 @@ export type AlertLevel = (typeof ALERT_LEVELS)[number];
  * mismo cliente una y otra vez (cada recomendación lo volvería a detectar).
  */
 export interface IAlert {
+  // Negocio al que pertenece el aviso; null = aviso interno de Bakano.
+  negocio: Types.ObjectId | null;
   client: Types.ObjectId | null;
   category: AlertCategory;
   level: AlertLevel;
@@ -30,6 +32,7 @@ export interface IAlert {
 
 const alertSchema = new Schema<IAlert>(
   {
+    negocio: { type: Schema.Types.ObjectId, ref: "Negocio", default: null, index: true },
     client: { type: Schema.Types.ObjectId, ref: "Client", default: null, index: true },
     category: { type: String, enum: ALERT_CATEGORIES, required: true },
     level: { type: String, enum: ALERT_LEVELS, required: true },
