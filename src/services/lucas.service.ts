@@ -30,6 +30,7 @@ import {
 import { clientCard, markChosen, recommendForClient, stageLabel } from "./recommendation.service";
 import { describirDestino, setAlertChat } from "./alert.service";
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
+import { resumenCrm } from "./crm.service";
 import { BUSINESS_KEY, getSetting, setSetting } from "./setting.service";
 import { answerCallback, escapeHtml, removeKeyboard, sendMessage } from "./telegram.service";
 
@@ -51,6 +52,7 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu copiloto de ventas. Leo tus conversacion
 /etapa <i>etapa</i>: ${CLIENT_STAGES.join(", ")}
 /negocio <i>texto</i>: qué vendemos, precios y condiciones (sin esto no afirmo precios)
 /alertas: a dónde y cuándo aviso al equipo. Agrégame a un grupo del equipo y escribe ahí /alertasaqui para que los avisos lleguen al grupo
+/crm: qué clientes tienen su CRM (GoHighLevel) y WhatsApp conectados, y quiénes dejaron ir leads
 /cobros: quién le debe a Bakano, con botón para generar el link de pago
 /soltar: dejar el cliente activo
 
@@ -376,6 +378,10 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
         chatId,
         "Ese comando se usa dentro del grupo del equipo, después de agregarme al grupo.",
       );
+      return;
+
+    case "crm":
+      await resumenCrm(operator);
       return;
 
     case "cobros":
