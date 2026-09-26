@@ -14,18 +14,20 @@ export const ALLOWED_UPDATES = [
 ];
 
 export const BOT_COMMANDS = [
+  { command: "calientes", description: "Los clientes más cerca de comprar" },
   { command: "cliente", description: "Buscar y elegir cliente: /cliente María" },
-  { command: "nuevo", description: "Crear cliente: /nuevo María Pérez | 0991234567" },
+  { command: "sugerir", description: "Qué responder: /sugerir [n] [pedido]" },
   { command: "ficha", description: "Ver la ficha del cliente activo" },
-  { command: "sugerir", description: "Qué responder: /sugerir [n] [instrucción]" },
-  { command: "contexto", description: "Conversaciones anteriores a leer: /contexto 3" },
-  { command: "nota", description: "Agregar nota al cliente activo" },
-  { command: "etapa", description: "Cambiar etapa del cliente activo" },
-  { command: "alertas", description: "A dónde y cuándo aviso al equipo" },
-  { command: "crm", description: "CRM y WhatsApp de los clientes, leads perdidos" },
-  { command: "cobros", description: "Quién debe a Bakano y links de pago" },
-  { command: "negocio", description: "Ver o cambiar lo que Lucas sabe del negocio" },
-  { command: "soltar", description: "Dejar de trabajar con el cliente activo" },
+  { command: "nuevo", description: "Crear cliente: /nuevo María | 0991234567" },
+  { command: "negocio", description: "Qué vendes, precios y condiciones" },
+  { command: "pago", description: "Tus datos de pago" },
+  { command: "regla", description: "Una regla que siempre respeto" },
+  { command: "reglas", description: "Ver y quitar reglas" },
+  { command: "nota", description: "Nota en la ficha del cliente" },
+  { command: "etapa", description: "Cambiar la etapa del cliente" },
+  { command: "contexto", description: "Conversaciones anteriores a leer" },
+  { command: "alertas", description: "Cuándo y dónde te aviso" },
+  { command: "soltar", description: "Dejar el cliente activo" },
   { command: "ayuda", description: "Cómo usar a Lucas" },
 ];
 
