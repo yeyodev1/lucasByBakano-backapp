@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { dbConnect } from "../config/mongo";
 import { handleUpdate } from "../services/lucas.service";
-import { revisarSinRespuesta } from "../services/monitor.service";
+import { avisarHallazgosCrm, revisarSinRespuesta } from "../services/monitor.service";
 import {
   BOT_COMMANDS,
   callTelegram,
@@ -28,6 +28,7 @@ async function main() {
           (r) =>
             r.avisos && console.log(`[monitor] ${r.avisos} aviso(s) de clientes sin respuesta`),
         )
+        .then(() => avisarHallazgosCrm())
         .catch((error) => console.error("[monitor]", error?.message ?? error)),
     10 * 60_000,
   );
