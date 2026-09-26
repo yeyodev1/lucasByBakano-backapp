@@ -34,15 +34,28 @@ export function isValidStage(stage: string): stage is ClientStage {
   return (CLIENT_STAGES as readonly string[]).includes(stage);
 }
 
-export async function getClientById(id: string | Types.ObjectId): Promise<ClientDoc> {
+/**
+ * Con negocioId, el lead tiene que ser de ese negocio: un botón o un id
+ * reenviado nunca abre el lead de otro negocio.
+ */
+export async function getClientById(
+  id: string | Types.ObjectId,
+  negocioId?: Types.ObjectId | null,
+): Promise<ClientDoc> {
   if (!Types.ObjectId.isValid(String(id))) throw new CustomError("Cliente no válido", 400);
-  const client = await Client.findById(id).lean<ClientDoc>();
+  const filter: Record<string, unknown> = { _id: id };
+  if (negocioId) filter.negocio = negocioId;
+  const client = await Client.findOne(filter).lean<ClientDoc>();
   if (!client) throw new CustomError("Cliente no encontrado", 404);
   return client;
 }
 
 /** Busca por teléfono, @usuario, correo o nombre (sin tildes). */
-export async function searchClients(query: string, limit = 8): Promise<ClientDoc[]> {
+export async function searchClients(
+  query: string,
+  negocioId: Types.ObjectId,
+  limit = 8,
+): Promise<ClientDoc[]> {
   const q = query.trim();
   if (!q) return [];
 
@@ -53,16 +66,22 @@ export async function searchClients(query: string, limit = 8): Promise<ClientDoc
   if (q.includes("@") && !q.startsWith("@")) or.push({ email: q.toLowerCase() });
   or.push({ searchName: { $regex: escapeRegex(normalizeName(q)) } });
 
-  return Client.find({ $or: or })
+  return Client.find({ negocio: negocioId, $or: or })
     .sort({ lastContactAt: -1, updatedAt: -1 })
     .limit(limit)
     .lean<ClientDoc[]>();
 }
 
-export async function listClients(params: { q?: string; stage?: string; page?: number }) {
+export async function listClients(params: {
+  q?: string;
+  stage?: string;
+  page?: number;
+  negocio?: string;
+}) {
   const page = Math.max(1, Number(params.page) || 1);
   const limit = 25;
   const filter: Record<string, unknown> = {};
+  if (params.negocio && Types.ObjectId.isValid(params.negocio)) filter.negocio = params.negocio;
   if (params.stage && isValidStage(params.stage)) filter.stage = params.stage;
   if (params.q?.trim()) filter.searchName = { $regex: escapeRegex(normalizeName(params.q)) };
 
@@ -77,9 +96,12 @@ export async function listClients(params: { q?: string; stage?: string; page?: n
   return { items, total, page, pages: Math.max(1, Math.ceil(total / limit)) };
 }
 
-export async function createClient(data: Partial<IClient> & { name: string }): Promise<ClientDoc> {
+export async function createClient(
+  data: Partial<IClient> & { name: string; negocio: Types.ObjectId },
+): Promise<ClientDoc> {
   const name = data.name?.trim();
   if (!name) throw new CustomError("El cliente necesita un nombre", 400);
+  if (!data.negocio) throw new CustomError("El lead necesita un negocio", 400);
   if (data.stage && !isValidStage(data.stage)) throw new CustomError("Etapa no válida", 400);
 
   const client = await Client.create({
@@ -161,15 +183,16 @@ export async function touchLastContact(id: Types.ObjectId, at: Date): Promise<vo
  */
 export async function resolveClient(
   identity: ClientIdentity,
-  options: { createIfMissing: boolean; source?: string },
+  options: { createIfMissing: boolean; source?: string; negocioId: Types.ObjectId },
 ): Promise<ResolveResult> {
-  const found = await findByIdentity(identity);
+  const found = await findByIdentity(identity, options.negocioId);
   if (found.client || found.candidates.length) return { ...found, created: false };
 
   const name = identity.name?.trim();
   if (!options.createIfMissing || !name) return { client: null, created: false, candidates: [] };
 
   const client = await createClient({
+    negocio: options.negocioId,
     name,
     phones: identity.phone ? [identity.phone] : [],
     email: identity.email ?? "",
@@ -182,9 +205,11 @@ export async function resolveClient(
 
 async function findByIdentity(
   identity: ClientIdentity,
+  negocioId: Types.ObjectId,
 ): Promise<{ client: ClientDoc | null; candidates: ClientDoc[] }> {
   if (identity.telegramUserId) {
     const client = await Client.findOne({
+      negocio: negocioId,
       telegramUserId: identity.telegramUserId,
     }).lean<ClientDoc>();
     if (client) return { client, candidates: [] };
@@ -193,6 +218,7 @@ async function findByIdentity(
     const digits = normalizePhone(identity.phone);
     if (digits.length >= 6) {
       const client = await Client.findOne({
+        negocio: negocioId,
         phones: { $regex: escapeRegex(digits.slice(-9)) + "$" },
       }).lean<ClientDoc>();
       if (client) return { client, candidates: [] };
@@ -200,16 +226,23 @@ async function findByIdentity(
   }
   if (identity.telegramUsername) {
     const client = await Client.findOne({
+      negocio: negocioId,
       telegramUsername: identity.telegramUsername.replace(/^@/, "").toLowerCase(),
     }).lean<ClientDoc>();
     if (client) return { client, candidates: [] };
   }
   if (identity.email) {
-    const client = await Client.findOne({ email: identity.email.toLowerCase() }).lean<ClientDoc>();
+    const client = await Client.findOne({
+      negocio: negocioId,
+      email: identity.email.toLowerCase(),
+    }).lean<ClientDoc>();
     if (client) return { client, candidates: [] };
   }
   if (identity.name?.trim()) {
-    const matches = await Client.find({ searchName: normalizeName(identity.name) })
+    const matches = await Client.find({
+      negocio: negocioId,
+      searchName: normalizeName(identity.name),
+    })
       .limit(5)
       .lean<ClientDoc[]>();
     if (matches.length === 1) return { client: matches[0], candidates: [] };
@@ -233,7 +266,11 @@ export interface CapturedData {
 export async function applyCapturedData(
   id: Types.ObjectId,
   data: CapturedData,
-  extra: { summary?: string; stage?: string },
+  extra: {
+    summary?: string;
+    stage?: string;
+    cierre?: { probabilidad: number; temperatura: string; falta: string[] };
+  },
 ): Promise<string[]> {
   const client = await Client.findById(id);
   if (!client) return [];
@@ -260,6 +297,7 @@ export async function applyCapturedData(
     }
   }
   if (extra.summary) client.summary = extra.summary;
+  if (extra.cierre) client.set("cierre", { ...extra.cierre, en: new Date() });
   // La etapa solo avanza sola desde "lead": moverla después es decisión del equipo.
   if (
     extra.stage &&
@@ -273,4 +311,16 @@ export async function applyCapturedData(
 
   await client.save();
   return changes;
+}
+
+/** Leads del negocio ordenados por qué tan cerca están de cerrar (últimos 14 días). */
+export async function leadsCalientes(negocioId: Types.ObjectId, limit = 10): Promise<ClientDoc[]> {
+  return Client.find({
+    negocio: negocioId,
+    stage: { $nin: ["cliente", "perdido"] },
+    "cierre.en": { $gt: new Date(Date.now() - 14 * 24 * 3_600_000) },
+  })
+    .sort({ "cierre.probabilidad": -1, lastContactAt: -1 })
+    .limit(limit)
+    .lean<ClientDoc[]>();
 }
