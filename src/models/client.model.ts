@@ -1,4 +1,4 @@
-import mongoose, { Schema } from "mongoose";
+import mongoose, { Schema, Types } from "mongoose";
 
 export const CLIENT_STAGES = [
   "lead",
@@ -19,6 +19,8 @@ export interface IClientNote {
 
 /** Ficha del CRM. Es el contexto que Lucas lee para saber con quién habla. */
 export interface IClient {
+  // Negocio al que pertenece este lead. Cada negocio ve solo los suyos.
+  negocio: Types.ObjectId;
   name: string;
   // Para buscar sin tildes ni mayúsculas.
   searchName: string;
@@ -33,6 +35,8 @@ export interface IClient {
   tags: string[];
   // Resumen vivo que Lucas actualiza después de cada análisis.
   summary: string;
+  // Qué tan cerca está de cerrar, según la última lectura de Lucas.
+  cierre: { probabilidad: number; temperatura: string; falta: string[]; en: Date | null };
   notes: IClientNote[];
   lastContactAt: Date | null;
   createdAt?: Date;
@@ -50,6 +54,7 @@ const noteSchema = new Schema<IClientNote>(
 
 const clientSchema = new Schema<IClient>(
   {
+    negocio: { type: Schema.Types.ObjectId, ref: "Negocio", required: true, index: true },
     name: { type: String, required: true, trim: true },
     searchName: { type: String, default: "", index: true },
     phones: { type: [String], default: [], index: true },
@@ -62,6 +67,10 @@ const clientSchema = new Schema<IClient>(
     interests: { type: [String], default: [] },
     tags: { type: [String], default: [] },
     summary: { type: String, default: "" },
+    cierre: {
+      type: { probabilidad: Number, temperatura: String, falta: [String], en: Date },
+      default: () => ({ probabilidad: 0, temperatura: "", falta: [], en: null }),
+    },
     notes: { type: [noteSchema], default: [] },
     lastContactAt: { type: Date, default: null },
   },
