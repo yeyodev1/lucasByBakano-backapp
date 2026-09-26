@@ -1,14 +1,16 @@
+import { Types } from "mongoose";
 import { Response, NextFunction } from "express";
 import { AuthRequest } from "../types/AuthRequest";
 import { CustomError } from "../errors/customError.error";
 import * as clientService from "../services/client.service";
 import * as conversationService from "../services/conversation.service";
 
-/** GET /api/clients?q=&stage=&page= */
+/** GET /api/clients?q=&stage=&page=&negocio= */
 export async function listClients(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { q, stage, page } = req.query;
+    const { q, stage, page, negocio } = req.query;
     const result = await clientService.listClients({
+      negocio: negocio !== undefined ? String(negocio) : undefined,
       q: q !== undefined ? String(q) : undefined,
       stage: stage !== undefined ? String(stage) : undefined,
       page: page !== undefined ? Number(page) : undefined,
@@ -19,23 +21,41 @@ export async function listClients(req: AuthRequest, res: Response, next: NextFun
   }
 }
 
-/** GET /api/clients/search?q= */
+function negocioId(value: unknown): Types.ObjectId {
+  if (typeof value !== "string" || !Types.ObjectId.isValid(value)) {
+    throw new CustomError("Indica el negocio (negocio=<id>)", 400);
+  }
+  return new Types.ObjectId(value);
+}
+
+/** GET /api/clients/search?q=&negocio= */
 export async function searchClients(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { q } = req.query;
-    const items = await clientService.searchClients(String(q ?? ""));
+    const { q, negocio } = req.query;
+    const items = await clientService.searchClients(String(q ?? ""), negocioId(negocio));
     res.status(200).json({ items });
   } catch (error) {
     next(error);
   }
 }
 
-/** POST /api/clients — body: { name, phones?, email?, company?, telegramUsername?, stage?, source?, interests?, tags? } */
+/** POST /api/clients — body: { negocio, name, phones?, email?, company?, telegramUsername?, stage?, source?, interests?, tags? } */
 export async function createClient(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    const { name, phones, email, company, telegramUsername, stage, source, interests, tags } =
-      req.body ?? {};
+    const {
+      negocio,
+      name,
+      phones,
+      email,
+      company,
+      telegramUsername,
+      stage,
+      source,
+      interests,
+      tags,
+    } = req.body ?? {};
     const client = await clientService.createClient({
+      negocio: negocioId(negocio),
       name: String(name ?? ""),
       phones,
       email,
