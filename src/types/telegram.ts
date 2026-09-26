@@ -84,9 +84,6 @@ export interface TgUpdate {
   edited_business_message?: TgMessage;
 }
 
-export interface TgInlineButton {
-  text: string;
-  callback_data: string;
-}
+export type TgInlineButton = { text: string } & ({ callback_data: string } | { url: string });
 
 export type TgInlineKeyboard = TgInlineButton[][];
