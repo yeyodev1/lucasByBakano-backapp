@@ -4,6 +4,7 @@ import { Client } from "../models/client.model";
 import { Conversation } from "../models/conversation.model";
 import { Message } from "../models/message.model";
 import { avisarEquipo } from "./alert.service";
+import { hallazgosDesde } from "./metrics.service";
 
 /**
  * Revisa los chats reales (Telegram Business) y avisa al equipo cuando un
@@ -71,4 +72,66 @@ export async function revisarSinRespuesta(): Promise<{ revisadas: number; avisos
     if (enviado) avisos++;
   }
   return { revisadas: conversaciones.length, avisos };
+}
+
+const TIPOS: Record<string, string> = {
+  cierre_casi_solo: "🎯 Cierre casi solo",
+  lead_sin_respuesta: "⏰ Lead sin respuesta",
+  oportunidad_estancada: "🧊 Oportunidad estancada",
+};
+
+/**
+ * La revisión diaria del CRM (en Metrics) deja hallazgos por cliente. Lucas
+ * le pasa al equipo un resumen por cliente y por día para que den
+ * seguimiento; el bot de Bakano ya se lo dijo al cliente.
+ */
+export async function avisarHallazgosCrm(): Promise<number> {
+  const hallazgos = await hallazgosDesde(new Date(Date.now() - 36 * 3_600_000));
+  const porEntorno = new Map<string, typeof hallazgos>();
+  for (const h of hallazgos) {
+    const clave = `${h.workspaceId}:${h.dia}`;
+    porEntorno.set(clave, [...(porEntorno.get(clave) ?? []), h]);
+  }
+
+  let avisos = 0;
+  for (const [clave, lista] of porEntorno) {
+    const [workspaceId] = clave.split(":");
+    const cierres = lista.filter((h) => h.tipo === "cierre_casi_solo").length;
+    const lineas = lista.map((h) =>
+      [
+        `${TIPOS[h.tipo] ?? h.tipo} · ${h.contacto.nombre || "sin nombre"}${h.contacto.telefono ? ` (${h.contacto.telefono})` : ""}${h.monto ? ` · $${h.monto}` : ""}`,
+        `  ${h.resumen}`,
+        h.queHacer && `  → ${h.queHacer}`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    const avisado = lista.some((h) => h.avisadoClienteEn);
+    const enviado = await avisarEquipo({
+      clientId: null,
+      clientName: lista[0].entorno,
+      category: "oportunidad",
+      level: cierres >= 2 ? "urgente" : "aviso",
+      text: [
+        `Su CRM muestra ${lista.length} lead${lista.length === 1 ? "" : "s"} que se le fue${lista.length === 1 ? "" : "ron"} ayer${cierres ? `, ${cierres} era${cierres === 1 ? "" : "n"} cierre casi solo` : ""}:`,
+        "",
+        ...lineas,
+        "",
+        avisado
+          ? "El bot de Bakano ya se lo avisó al cliente con el link a Bakanology. Denle seguimiento para que tome el curso de ventas."
+          : "Todavía no se le avisó al cliente: díganselo y recomiéndenle el curso de ventas de Bakanology.",
+      ].join("\n"),
+      dedupeKey: `crm:${clave}`,
+      keyboard: [
+        [
+          {
+            text: "🔌 Ver su CRM en Metrics",
+            url: `${env.METRICS_APP_URL}/app/workspaces/${workspaceId}/integraciones`,
+          },
+        ],
+      ],
+    });
+    if (enviado) avisos++;
+  }
+  return avisos;
 }
