@@ -1,4 +1,5 @@
 import { Types } from "mongoose";
+import { CustomError } from "../errors/customError.error";
 import { Message } from "../models/message.model";
 import { TgInlineKeyboard, TgMessage } from "../types/telegram";
 import * as aiService from "./ai.service";
@@ -29,6 +30,14 @@ export function readPendingCapture(operator: OperatorDoc): PendingCapture | null
   } catch {
     return null;
   }
+}
+
+/** Todo lead nuevo cae en el negocio de quien lo trae. */
+function negocioDe(operator: OperatorDoc): Types.ObjectId {
+  if (!operator.negocio) {
+    throw new CustomError("No estás vinculado a ningún negocio. Usa /vincular <código>.", 403);
+  }
+  return operator.negocio;
 }
 
 function mediaTypeFromPath(path: string): string {
@@ -115,7 +124,10 @@ export async function handleCapture(
   let created = false;
 
   if (hasIdentity) {
-    const result = await resolveClient(identity, { createIfMissing: false });
+    const result = await resolveClient(identity, {
+      createIfMissing: false,
+      negocioId: negocioDe(operator),
+    });
     client = result.client;
     if (!client && result.candidates.length) {
       await askForClient(
@@ -133,10 +145,14 @@ export async function handleCapture(
   }
   // La captura no dice de quién es: se usa el cliente con el que se está trabajando.
   if (!client && operator.activeClientId && !identity.name) {
-    client = await getClientById(operator.activeClientId);
+    client = await getClientById(operator.activeClientId, operator.negocio);
   }
   if (!client && identity.name) {
-    const result = await resolveClient(identity, { createIfMissing: true, source: data.platform });
+    const result = await resolveClient(identity, {
+      createIfMissing: true,
+      source: data.platform,
+      negocioId: negocioDe(operator),
+    });
     client = result.client;
     created = result.created;
   }
@@ -184,9 +200,14 @@ export async function resolvePendingCapture(
   await updateOperator(operator._id, { pendingAction: "" });
 
   let client: ClientDoc | null = null;
-  if (clientId) client = await getClientById(clientId);
+  if (clientId) client = await getClientById(clientId, operator.negocio);
   else if (pending.name)
-    client = (await resolveClient({ name: pending.name }, { createIfMissing: true })).client;
+    client = (
+      await resolveClient(
+        { name: pending.name },
+        { createIfMissing: true, negocioId: negocioDe(operator) },
+      )
+    ).client;
   if (!client) return false;
 
   await saveAndRecommend(operator, client, {
@@ -281,7 +302,11 @@ export async function handleForward(operator: OperatorDoc, message: TgMessage): 
   let client: ClientDoc | null = null;
   let created = false;
   if (identity.name) {
-    const result = await resolveClient(identity, { createIfMissing: true, source: "telegram" });
+    const result = await resolveClient(identity, {
+      createIfMissing: true,
+      source: "telegram",
+      negocioId: negocioDe(operator),
+    });
     client = result.client ?? null;
     created = result.created;
     if (!client && result.candidates.length && operator.activeClientId) {
@@ -289,7 +314,9 @@ export async function handleForward(operator: OperatorDoc, message: TgMessage): 
         result.candidates.find((c) => String(c._id) === String(operator.activeClientId)) ?? null;
     }
   }
-  if (!client && operator.activeClientId) client = await getClientById(operator.activeClientId);
+  if (!client && operator.activeClientId) {
+    client = await getClientById(operator.activeClientId, operator.negocio);
+  }
   if (!client) {
     await sendMessage(
       operator.telegramChatId,
@@ -348,7 +375,7 @@ export async function handleBusinessMessage(
 
   const { client, created } = await resolveClient(
     { name: clientName, telegramUserId: chat.id, telegramUsername: chat.username },
-    { createIfMissing: true, source: "telegram" },
+    { createIfMissing: true, source: "telegram", negocioId: negocioDe(operator) },
   );
   if (!client) return;
 
@@ -411,11 +438,12 @@ async function revisarRespuestaDelEquipo(
     const alerta = await aiService.reviewAttention({ client, current, teamName: operator.name });
     if (alerta.level === "ninguna" || !alerta.message) return;
     await avisarEquipo({
+      negocioId: client.negocio,
       clientId: client._id,
       clientName: client.name,
       category: alerta.category,
       level: alerta.level,
-      text: `${alerta.message}\n\n(Chat de ${operator.name || "un asesor"} por Telegram.)`,
+      text: `${alerta.message}\n\n(Chat de ${operator.name || "un vendedor"} por Telegram.)`,
     });
   } catch (error: any) {
     console.error("[lucas] revisión de atención:", error?.message ?? error);
