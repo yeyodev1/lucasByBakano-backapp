@@ -22,6 +22,7 @@ export const BOT_COMMANDS = [
   { command: "nota", description: "Agregar nota al cliente activo" },
   { command: "etapa", description: "Cambiar etapa del cliente activo" },
   { command: "alertas", description: "A dónde y cuándo aviso al equipo" },
+  { command: "crm", description: "CRM y WhatsApp de los clientes, leads perdidos" },
   { command: "cobros", description: "Quién debe a Bakano y links de pago" },
   { command: "negocio", description: "Ver o cambiar lo que Lucas sabe del negocio" },
   { command: "soltar", description: "Dejar de trabajar con el cliente activo" },
