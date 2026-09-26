@@ -417,3 +417,75 @@ export async function estadoCrmEntornos(): Promise<
     hallazgosSemana: conteoPor.get(String(w._id)) ?? 0,
   }));
 }
+
+export interface PerfilNegocio {
+  nombre: string;
+  activo: boolean;
+  tipoNegocio: string;
+  vertical: string;
+  descripcion: string;
+  productosServicios: string;
+  propuestaValor: string;
+  publicoObjetivo: string;
+  problemaResuelto: string;
+  tono: string;
+  ticketPromedio: string;
+  porQueTeCompran: string;
+  trafficDirection: string;
+}
+
+/** Perfil de marca del negocio en Metrics: lo que Lucas sabe de lo que vende. */
+export async function perfilDeEntorno(workspaceId: string): Promise<PerfilNegocio | null> {
+  if (!env.METRICS_DB_URI || !Types.ObjectId.isValid(workspaceId)) return null;
+  try {
+    const db = (await conectar()).db!;
+    const w: any = await db
+      .collection("workspaces")
+      .findOne(
+        { _id: new Types.ObjectId(workspaceId) },
+        { projection: { name: 1, isActive: 1, brandProfile: 1 } },
+      );
+    if (!w) return null;
+    const b = w.brandProfile ?? {};
+    const texto = (v: unknown) => String(v ?? "").slice(0, 800);
+    return {
+      nombre: w.name ?? "",
+      activo: Boolean(w.isActive),
+      tipoNegocio: texto(b.tipoNegocio),
+      vertical: texto(b.vertical),
+      descripcion: texto(b.descripcion),
+      productosServicios: texto(b.productosServicios),
+      propuestaValor: texto(b.propuestaValor),
+      publicoObjetivo: texto(b.publicoObjetivo),
+      problemaResuelto: texto(b.problemaResuelto),
+      tono: texto(b.tono),
+      ticketPromedio: texto(b.ticketPromedio),
+      porQueTeCompran: texto(b.porQueTeCompran),
+      trafficDirection: texto(b.trafficDirection),
+    };
+  } catch (error: any) {
+    console.error("[metrics] perfil:", error?.message ?? error);
+    return null;
+  }
+}
+
+/** Entornos cuyo nombre se parece a lo buscado (para dar de alta un negocio). */
+export async function buscarEntornos(
+  nombre: string,
+): Promise<{ id: string; nombre: string; activo: boolean }[]> {
+  if (!env.METRICS_DB_URI || !nombre.trim()) return [];
+  const db = (await conectar()).db!;
+  const docs = await db
+    .collection("workspaces")
+    .find(
+      { name: { $regex: escapeRegex(nombre.trim()), $options: "i" } },
+      { projection: { name: 1, isActive: 1 } },
+    )
+    .limit(6)
+    .toArray();
+  return docs.map((w: any) => ({
+    id: String(w._id),
+    nombre: w.name ?? "",
+    activo: Boolean(w.isActive),
+  }));
+}
