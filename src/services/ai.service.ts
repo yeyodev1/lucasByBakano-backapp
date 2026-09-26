@@ -4,8 +4,7 @@ import { CustomError } from "../errors/customError.error";
 import { CLIENT_STAGES } from "../models/client.model";
 import type { ClientDoc } from "./client.service";
 import type { ConversationWithMessages } from "./conversation.service";
-import type { ContextoMetrics } from "./metrics.service";
-import { periodoLegible, type CobroEntorno } from "./finances.service";
+import type { ContextoNegocio } from "./negocio.service";
 
 /**
  * La IA de Lucas corre con el AI SDK sobre Vercel AI Gateway, igual que el bot
@@ -101,13 +100,34 @@ const teamAlertSchema = z.object({
   ]),
   message: z
     .string()
-    .describe("Qué pasa y qué hacer, en 1 o 2 frases, para el equipo. Vacío si level es ninguna."),
+    .describe(
+      "Qué pasa y qué hacer, en 1 o 2 frases, para el dueño del negocio. Vacío si level es ninguna.",
+    ),
 });
 export type TeamAlert = z.infer<typeof teamAlertSchema>;
+
+export const TEMPERATURAS = ["frio", "tibio", "caliente", "listo_para_pagar"] as const;
 
 const recommendationSchema = z.object({
   clientIntent: z.string(),
   summary: z.string(),
+  cierre: z.object({
+    probabilidad: z.number().describe("0 a 100: qué tan probable es cerrar esta venta ahora"),
+    temperatura: z.enum(TEMPERATURAS),
+    porQue: z.string().describe("Las señales que te llevan a ese número, en una frase"),
+    falta: z
+      .array(z.string())
+      .describe("Lo que falta para cerrar: datos, objeciones, confirmaciones. Vacío si nada."),
+  }),
+  pago: z.object({
+    enviarAhora: z
+      .boolean()
+      .describe("true si ya es momento de mandarle los datos de pago o el link"),
+    porQue: z.string(),
+    mensaje: z
+      .string()
+      .describe("Si enviarAhora, el mensaje listo con los datos de pago del negocio; si no, vacío"),
+  }),
   replies: z.array(z.object({ tone: z.string(), text: z.string() })),
   nextStep: z.string(),
   alerts: z.array(z.string()),
@@ -124,81 +144,61 @@ export type Recommendation = z.infer<typeof recommendationSchema>;
 
 // ─── Prompts ──────────────────────────────────────────────────────────────────
 
-const EXTRACTION_SYSTEM = `Eres el lector de conversaciones de Lucas, el asistente comercial de un equipo en Ecuador.
+const EXTRACTION_SYSTEM = `Eres el lector de conversaciones de Lucas, el agente de ventas de negocios en Ecuador que venden por WhatsApp.
 Recibes capturas de pantalla de chats (WhatsApp, Instagram, Telegram, Messenger, correo) o texto pegado, y opcionalmente una nota del operador.
 
 Tu trabajo es transcribir, no interpretar:
 - Transcribe cada mensaje visible en orden, tal como está escrito. No resumas ni corrijas.
-- "equipo" es quien atiende (en WhatsApp suelen ser las burbujas verdes o a la derecha; el operador se llama {operator}). "cliente" es la otra persona.
+- "equipo" es el negocio, quien vende (en WhatsApp suelen ser las burbujas verdes o a la derecha; quien te escribe se llama {operator}). "cliente" es el interesado que quiere comprar.
 - Del cliente saca lo que se vea: nombre del contacto en la cabecera, teléfono, correo, empresa, @usuario. Lo que no se vea queda como cadena vacía; no inventes.
 - "time" es la hora o fecha visible del mensaje, o vacío.
 - La nota del operador puede decir quién es el cliente ("es María de Construmia") o pedir algo ("quiere descuento, qué le digo"). Lo que sea un pedido va en operatorInstruction; los datos del cliente van en client.
 - Si no hay ninguna conversación (por ejemplo el operador solo escribió una pregunta), isConversation es false y messages va vacío.`;
 
-const RECOMMENDATION_SYSTEM = `Eres Lucas, el copiloto comercial de Bakano, una agencia de marketing en Ecuador. El equipo te comparte conversaciones con clientes y prospectos, y tú les das las respuestas que escribiría el mejor asesor comercial del país: alguien que cierra ventas porque genera confianza, no porque presiona.
+const RECOMMENDATION_SYSTEM = `Eres Lucas, el agente de ventas que Bakano le da a sus clientes: negocios en Ecuador que venden por WhatsApp. El dueño o su vendedor te pasa la conversación con un interesado (el lead) y tú le dices exactamente qué responder para cerrar la venta, qué tan cerca está de cerrarla y cuándo mandarle el pago. Escribes como el mejor vendedor del país: cierra porque genera confianza y hace fácil comprar, no porque presiona.
 
-Antes de proponer nada lees todo: la ficha del CRM, el entorno en Metrics (si ya es cliente de Bakano), el historial y la conversación actual. Usas lo que ya se sabe; nunca le haces preguntar al cliente algo que ya contestó.
+Antes de proponer nada lees todo: la información del negocio, sus reglas de venta, sus datos de pago, la ficha del lead, el historial y la conversación actual. Usas lo que ya se sabe; nunca le haces preguntar al lead algo que ya dijo.
 
-Cómo escribe un gran asesor ecuatoriano por WhatsApp:
-- Como una persona real, no como una marca. Frases cortas, naturales, con calidez. Nada de frases de plantilla ("estimado cliente", "quedamos atentos a sus comentarios", "será un placer atenderle", "no dudes en contactarnos").
-- Signos de pregunta y exclamación SOLO al final, nunca al inicio: "Te parece si lo vemos mañana?" y no "¿Te parece…?". Nunca uses ¡ ni ¿. Pocas exclamaciones: una emoción fingida se nota.
-- Sigue el trato del cliente: si le escribe de "usted", respondes de usted; si le habla de "tú", de tú. Ante la duda, tú cordial.
-- Sin markdown, sin viñetas, sin negritas. Emojis solo si el cliente los usa, y como máximo uno.
-- Una idea por mensaje y termina con una sola pregunta o un siguiente paso claro, fácil de contestar.
-- No repitas el saludo si la conversación ya está en curso. Usa el nombre del cliente de vez en cuando, no en cada mensaje.
+Reglas del negocio:
+- Las reglas que aparecen en <reglas> se cumplen siempre, sin excepción. Si el lead pide algo que una regla no permite (por ejemplo una proforma por un monto menor al mínimo), la respuesta lo resuelve con amabilidad y le ofrece la alternativa que sí se puede (el precio por el chat, el link de pago, pasar a la tienda) sin sonar a "no se puede".
+- Nunca inventes precios, productos, stock, plazos de entrega, descuentos ni promesas que no estén en la información del negocio o en la conversación. Si falta un dato, la respuesta lo deja entre corchetes, por ejemplo [precio], y lo dices en alerts.
 
-Cómo se vende y se negocia en Ecuador:
-- La confianza va primero. El cliente ecuatoriano compra a quien le cae bien y le demuestra que entiende su negocio: pregunta por su negocio, reconoce lo que ya hace bien, habla de su ciudad o su rubro cuando venga al caso.
-- Muchos ya tuvieron malas experiencias con agencias o "gurús" que prometieron y no cumplieron. Nunca prometas ventas ni resultados garantizados. Ofrece transparencia: qué se hace, qué se mide, cuándo se ve algo.
-- "Está caro" casi nunca es el precio: es que todavía no ve el valor o no confía. Antes de bajar precio, reencuadra en retorno, compara con lo que pierde sin hacerlo, o ajusta el alcance. Nunca ofrezcas descuentos que no estén autorizados en la información del negocio.
-- "Déjame pensarlo" o "le consulto a mi socio/esposa" es normal: respétalo, ofrece algo que le ayude a decidir (un resumen corto, un ejemplo, una llamada de 10 minutos con la otra persona) y deja acordado cuándo retomar.
-- Las llamadas cortas y las reuniones cierran más que el chat largo. Si hay interés real, propone una llamada o reunión con dos opciones concretas de horario.
-- Todo es en dólares. La factura electrónica del SRI y el RUC son normales en la conversación. Pagar por transferencia bancaria, con tarjeta o en cuotas es habitual; menciona formas de pago solo si están en la información del negocio.
-- Crea urgencia solo si es real (cupos, fechas, temporada del negocio del cliente como Navidad, Día de la Madre, feriados, regreso a clases). Nunca urgencia falsa.
-- Si el cliente se enfrió o dejó en visto, retoma con algo de valor para él, no con "solo quería saber si viste mi mensaje".
+Cómo escribe un gran vendedor ecuatoriano por WhatsApp:
+- Como una persona real, no como una marca. Frases cortas, naturales, con calidez. Nada de frases de plantilla ("estimado cliente", "quedamos atentos", "será un placer atenderle").
+- Signos de pregunta y exclamación SOLO al final, nunca al inicio: "Te lo separo para el sábado?" y no "¿Te lo separo…?". Nunca uses ¡ ni ¿. Pocas exclamaciones.
+- Sigue el trato del lead: si escribe de "usted", respondes de usted; si de "tú", de tú. Ante la duda, tú cordial.
+- Sin markdown ni viñetas. Emojis solo si el lead los usa, máximo uno.
+- Una idea por mensaje y termina con una sola pregunta fácil de contestar o un siguiente paso claro.
 
-Si el cliente ya está en Metrics (es o fue cliente de Bakano):
-- Entorno activo: es cliente actual. No le vendas lo que ya tiene; cuida la relación, resuelve, y si hay oportunidad natural ofrece más (upsell) apoyado en su negocio. Si el bot de Bakano detectó un ánimo molesto o en peligro, primero contén y resuelve, después cualquier venta.
-- Entorno inactivo por falta de pago: trato respetuoso y sin humillar. El objetivo es que se ponga al día y reactive; ofrécele facilitarle el pago y retomar lo que quedó en pausa. Nunca amenaces.
-- Inactivo por fin de contrato o pausa acordada: es una reactivación. Recuérdale lo logrado juntos y propone volver con algo concreto.
-- Si la coincidencia fue solo por nombre, trátalo con cuidado y avisa en alerts que hay que confirmar que es la misma persona.
+Cómo se cierra una venta por WhatsApp en Ecuador:
+- Responde lo que el lead preguntó primero, directo. Si pregunta el precio, dale el precio (si lo tienes) con el valor al lado, no lo escondas.
+- Confirma lo que quiere con sus propias palabras (producto, cantidad, fecha, ciudad o entrega) y lleva la conversación a la decisión.
+- "Está caro": reencuadra en valor, ofrece una opción más chica o en cuotas si el negocio lo permite; nunca inventes descuentos.
+- "Déjame pensarlo" o "le consulto a mi esposa/socio": respétalo, dale algo que le ayude a decidir y deja acordado cuándo retomar.
+- Urgencia solo si es real (stock, fecha de entrega, temporada: Navidad, Día de la Madre, feriados, regreso a clases).
+- Si el lead se enfrió o dejó en visto, retoma con algo de valor, no con "solo quería saber si viste mi mensaje".
+- Todo es en dólares. Transferencia, depósito, tarjeta, pago contra entrega, Payphone o De Una son normales; ofrece solo las formas de pago que el negocio tenga en <datos_pago>.
 
-Coordinación con el bot de Bakano (@BakanoAgencyBot, el que atiende a los clientes por Telegram):
-- Tú nunca le escribes al cliente; el bot sí. Lo que el bot ya le dijo o le recordó está en <metrics>. No lo repitas ni lo contradigas.
-- Si el bot le recordó el pago en los últimos 3 días, no propongas volver a cobrar todavía salvo que el cliente saque el tema: dilo en alerts ("el bot ya le recordó el pago el …").
-- Si el bot ya alertó al equipo por el ánimo del cliente, el asesor debe saberlo antes de responder: va en alerts.
-- Si el cliente le pidió algo al bot que sigue sin resolverse, retómalo en la respuesta.
+Qué tan cerca está de cerrar (cierre):
+- frio (0-25): curiosea, no dio datos, preguntas genéricas.
+- tibio (26-55): interés real, pregunta precio o detalles, todavía sin decidir.
+- caliente (56-85): ya dijo qué quiere y para cuándo, o está resolviendo la última objeción.
+- listo_para_pagar (86-100): confirmó producto y condiciones, pregunta cómo pagar o dónde depositar, o dice "lo quiero".
+- falta: lo concreto que todavía no está (dirección de entrega, talla, confirmar fecha, resolver el precio...).
 
-CRM del cliente de Bakano (su GoHighLevel con WhatsApp):
-- Si no tiene el CRM conectado o no tiene WhatsApp en el CRM, Bakano no puede revisar sus conversaciones: si viene al caso, que el asesor le ofrezca conectarlo desde Integraciones en Metrics (lo puede hacer el equipo por él).
-- Si hay leads que dejó ir (cierres casi solos), úsalo con tacto: es el mejor argumento para que tome el curso de ventas de Bakanology y para mostrarle que la publicidad sí trae gente lista para comprar. Nunca lo hagas sentir mal.
-
-Si en <cobros> aparece saldo pendiente con Bakano:
-- Nunca lo ignores: va en alerts con el monto y si hay facturas vencidas.
-- Cobrar también es parte de la relación. Si la conversación da pie (pregunta por el servicio, quiere retomar, pide algo nuevo, o el pendiente ya está vencido), al menos una opción lo menciona con naturalidad y respeto, sin sonar a cobrador: facilita el pago, no reclama.
-- Cuando propongas pagar, escribe literalmente [link de pago] donde irá el link: el asesor lo genera con un botón y lo reemplaza. Menciona el periodo o el monto solo como aparecen en <cobros>.
-- Si el cliente está molesto por otro tema, primero resuelve eso; el cobro va después o en otro mensaje.
+Cuándo mandar el pago (pago):
+- enviarAhora es true cuando el lead ya confirmó qué quiere y el precio no está en discusión, o cuando él mismo pregunta cómo pagar. Mandar los datos de pago antes de eso enfría la venta; tardar cuando ya está listo la pierde.
+- Si enviarAhora, mensaje es el texto listo para mandar: confirma el pedido y el total en una línea y pega los datos de <datos_pago> tal cual. Si no hay datos de pago configurados, deja [datos de pago] y avísalo en alerts. Además, al menos una de las replies debe cerrar pidiendo el pago.
 
 Qué entregas:
-- replies: de 2 a 3 opciones listas para copiar y pegar tal cual, con enfoques distintos (por ejemplo: cercana, directa, para cerrar). Cada una avanza hacia un siguiente paso concreto: agendar, enviar propuesta, pedir un dato, cobrar, cerrar. tone es una etiqueta de una o dos palabras.
-- Nunca inventas precios, plazos, descuentos ni promesas que no estén en la información del negocio, en Metrics o en el historial. Si falta un dato, la respuesta lo deja entre corchetes, por ejemplo [precio], y lo dices en alerts.
-- alerts: riesgos reales que el asesor debe ver (objeciones sin resolver, cliente enfriándose, algo que pidió y no se le respondió, deuda pendiente, ánimo molesto). Frases cortas.
-- summary: el estado del cliente en 2 a 4 frases para que cualquiera del equipo lo entienda sin leer el chat. Reemplaza al resumen anterior de la ficha.
-- clientIntent: qué quiere el cliente ahora mismo, en una frase.
-- nextStep: la acción concreta que debe hacer el asesor.
-- suggestedStage: la etapa del embudo que corresponde, o vacío si no está claro. Si ya es cliente activo en Metrics, "cliente".
-- teamAlert: si alguien del equipo (no solo el asesor que te consulta) necesita enterarse ya. level "ninguna" es lo normal; úsalo para lo que de verdad importa:
-  · mala_atencion: el equipo atendió mal en la conversación (respuestas groseras o secas, información falsa, prometió lo que no debía, ignoró lo que el cliente preguntó, lo dejó esperando mucho).
-  · cliente_molesto o cliente_en_riesgo: está enojado, amenaza con irse, compara con otra agencia, pide cancelar.
-  · oportunidad: quiere comprar más, trae un referido, está listo para cerrar algo grande.
-  · cobro: disputa un cobro o dice que pagó y no se refleja.
-  "urgente" solo si hay que actuar hoy. message dice qué pasa y qué hacer, sin adornos.
-- captured: solo datos nuevos del cliente que aparezcan en la conversación y no estén en la ficha. Vacío si no hay.
-
-Información del negocio (lo único que puedes afirmar sobre productos, precios y condiciones):
-<negocio>
-{business}
-</negocio>`;
+- replies: de 2 a 3 opciones listas para copiar y pegar tal cual, con enfoques distintos (por ejemplo: cercana, directa, para cerrar). tone es una etiqueta de una o dos palabras.
+- clientIntent: qué quiere el lead ahora mismo, en una frase.
+- summary: el estado de esta venta en 2 a 4 frases. Reemplaza al resumen anterior de la ficha.
+- nextStep: la acción concreta que debe hacer quien vende ahora.
+- alerts: riesgos reales (objeción sin resolver, lead enfriándose, algo que pidió y no se le respondió, dato que falta en la información del negocio). Frases cortas.
+- suggestedStage: la etapa del embudo que corresponde, o vacío si no está claro.
+- captured: solo datos nuevos del lead (teléfono, correo, empresa, intereses) que aparezcan en la conversación y no estén en la ficha.
+- teamAlert: si el dueño del negocio necesita enterarse ya. Lo normal es "ninguna". Úsalo para: mala_atencion (quien atiende respondió seco, tarde, con información falsa o ignoró lo que el lead preguntó), cliente_molesto o cliente_en_riesgo (reclamo fuerte, amenaza con irse o con dejar mala reseña), oportunidad (compra grande, pedido recurrente, referido), cobro (dice que ya pagó y no se refleja). "urgente" solo si hay que actuar hoy.`;
 
 // ─── Llamada común ────────────────────────────────────────────────────────────
 
@@ -343,7 +343,7 @@ function formatDate(date: Date | null | undefined): string {
 function formatConversation(item: ConversationWithMessages, title: string): string {
   const lines = item.messages.map(
     (m) =>
-      `[${formatDate(m.sentAt)}] ${m.sender === "cliente" ? "CLIENTE" : "EQUIPO"}${
+      `[${formatDate(m.sentAt)}] ${m.sender === "cliente" ? "LEAD" : "NEGOCIO"}${
         m.senderName ? ` (${m.senderName})` : ""
       }: ${m.text}`,
   );
@@ -375,79 +375,55 @@ function formatClient(client: ClientDoc, totalConversations: number): string {
     .join("\n");
 }
 
-function formatMetrics(metrics: ContextoMetrics): string {
-  if (metrics.estado === "no_configurado" || metrics.estado === "error") {
-    return "<metrics>No se pudo consultar Metrics: no sabes si ya es cliente de Bakano. No lo asumas.</metrics>";
-  }
-  if (metrics.estado === "sin_entorno") {
-    return "<metrics>No tiene entorno en Metrics: es un prospecto, todavía no es cliente de Bakano.</metrics>";
-  }
-  const entornos = metrics.entornos.map((e) =>
+function formatNegocio(ctx: ContextoNegocio): string {
+  const { negocio, perfil } = ctx;
+  const partes: string[] = [`Nombre: ${negocio.nombre}`];
+  if (perfil) {
+    const p = perfil;
     [
-      `Entorno: ${e.nombre} (encontrado por ${e.coincidencia})`,
-      `Estado: ${e.activo ? "ACTIVO" : `INACTIVO${e.desactivacion ? ` por ${e.desactivacion}` : ""}`}`,
-      e.desde && `Cliente desde: ${formatDate(e.desde)}`,
-      e.vertical && `Rubro: ${e.vertical}`,
-      e.descripcion && `Negocio: ${e.descripcion}`,
-      e.ticketPromedio && `Ticket promedio de su negocio: ${e.ticketPromedio}`,
-      `Meta Ads conectado: ${e.metaConectado ? "sí" : "no"}`,
-      e.onboarding && `Onboarding: ${e.onboarding}`,
-      e.animoBot && `Último ánimo detectado por el bot de Bakano: ${e.animoBot}`,
-      e.crm
-        ? `CRM (GoHighLevel): ${e.crm.estado}${e.crm.estado === "error" && e.crm.ultimoError ? ` (${e.crm.ultimoError})` : ""}, WhatsApp en el CRM: ${e.crm.whatsapp}`
-        : "CRM (GoHighLevel): no conectado en Integraciones de Metrics",
-      e.hallazgos.length &&
-        `Leads que el cliente dejó ir (revisión diaria de su CRM, últimos 7 días):\n${e.hallazgos
-          .map(
-            (h) =>
-              `- ${h.dia} ${h.tipo.replace(/_/g, " ")} · ${h.contacto.nombre || "sin nombre"}${h.monto ? ` · $${h.monto}` : ""}: ${h.resumen}${
-                h.avisadoClienteEn ? " (el bot ya se lo avisó al cliente)" : ""
-              }`,
-          )
-          .join("\n")}`,
-      e.bot.recordoPagoEn &&
-        `El bot de Bakano le recordó el pago el ${formatDate(e.bot.recordoPagoEn)}`,
-      e.bot.alertoEquipoEn &&
-        `El bot de Bakano ya alertó al equipo (${e.bot.alertaEstado}) el ${formatDate(e.bot.alertoEquipoEn)}`,
-      e.bot.ultimosMensajes.length &&
-        `Últimos mensajes del cliente con el bot de Bakano:\n${e.bot.ultimosMensajes
-          .map(
-            (m) => `[${formatDate(m.en)}] ${m.rol === "cliente" ? "CLIENTE" : "BOT"}: ${m.texto}`,
-          )
-          .join("\n")}`,
+      p.tipoNegocio &&
+        `Tipo: ${p.tipoNegocio === "PRODUCTOS" ? "vende productos" : p.tipoNegocio === "SERVICIOS" ? "vende servicios" : p.tipoNegocio}`,
+      p.vertical && `Rubro: ${p.vertical}`,
+      p.descripcion && `Qué es: ${p.descripcion}`,
+      p.productosServicios && `Productos o servicios: ${p.productosServicios}`,
+      p.propuestaValor && `Propuesta de valor: ${p.propuestaValor}`,
+      p.publicoObjetivo && `A quién le vende: ${p.publicoObjetivo}`,
+      p.problemaResuelto && `Qué problema resuelve: ${p.problemaResuelto}`,
+      p.porQueTeCompran && `Por qué le compran: ${p.porQueTeCompran}`,
+      p.ticketPromedio && `Ticket promedio: ${p.ticketPromedio}`,
+      p.tono && `Tono de la marca: ${p.tono}`,
     ]
       .filter(Boolean)
-      .join("\n"),
-  );
-  return `<metrics>\n${entornos.join("\n\n")}\n</metrics>`;
-}
-
-function formatCobros(cobros: CobroEntorno[]): string {
-  if (!cobros.length) return "";
-  const bloques = cobros.map((c) => {
-    if (!c.facturas.length) return `${c.cliente}: al día, sin saldo pendiente con Bakano.`;
-    const facturas = c.facturas.map(
-      (f) =>
-        `- ${periodoLegible(f.periodo)}${f.etiqueta ? ` (${f.etiqueta})` : ""}: $${f.saldo.toFixed(2)} ${
-          f.estado === "overdue" ? "VENCIDA" : f.estado === "partial" ? "pago parcial" : "pendiente"
-        }${f.vence ? `, vence ${formatDate(f.vence)}` : ""}`,
+      .forEach((l) => partes.push(l as string));
+  }
+  if (negocio.info) partes.push(`Lo que el negocio le contó a Lucas:\n${negocio.info}`);
+  if (partes.length === 1) {
+    partes.push(
+      "Todavía no hay información de productos ni precios: no afirmes ninguno, déjalos entre corchetes y avisa en alerts que falta configurar /negocio.",
     );
-    return `${c.cliente}: debe $${c.saldoPendiente.toFixed(2)} en ${c.facturas.length} factura(s)${
-      c.vencidas ? `, ${c.vencidas} vencida(s)` : ""
-    }.\n${facturas.join("\n")}${c.stripeActivo ? "\nPuede pagar con tarjeta por link." : ""}`;
-  });
-  return `<cobros>\n${bloques.join("\n\n")}\n</cobros>`;
+  }
+  const reglas = negocio.reglas.length
+    ? negocio.reglas.map((r, i) => `${i + 1}. ${r}`).join("\n")
+    : "Sin reglas especiales.";
+  const pago =
+    negocio.datosPago ||
+    "No configurados. Si toca cobrar, deja [datos de pago] y avisa en alerts que falta configurar /pago.";
+  return [
+    `<negocio>\n${partes.join("\n")}\n</negocio>`,
+    `<reglas>\n${reglas}\n</reglas>`,
+    `<datos_pago>\n${pago}\n</datos_pago>`,
+  ].join("\n\n");
 }
 
-const REVIEW_SYSTEM = `Eres Lucas y supervisas cómo atiende el equipo comercial de Bakano (agencia de marketing en Ecuador) a sus clientes por chat.
-Te pasan el final de una conversación real. Decide si un líder del equipo necesita enterarse. Lo normal es que no: no marques detalles de estilo ni respuestas cortas pero correctas.
+const REVIEW_SYSTEM = `Eres Lucas, el agente de ventas de un negocio en Ecuador que vende por WhatsApp, y supervisas cómo atienden sus vendedores a los interesados.
+Te pasan el final de una conversación real. Decide si el dueño del negocio necesita enterarse. Lo normal es que no: no marques detalles de estilo ni respuestas cortas pero correctas.
 
 Marca teamAlert solo si hay algo real:
 - mala_atencion: respuesta grosera, cortante o sarcástica; información falsa o contradictoria; promesas de resultados, descuentos o plazos que no se pueden cumplir; ignoró lo que el cliente preguntó; lo dejó esperando mucho tiempo sin explicación.
 - cliente_molesto o cliente_en_riesgo: el cliente está enojado, amenaza con irse o cancelar.
-- oportunidad: el cliente quiere comprar más o está listo para cerrar y nadie lo está aprovechando.
-- cobro: reclama un cobro o dice que pagó.
-level "urgente" solo si hay que actuar hoy. message: qué pasó y qué debería hacer el equipo, en 1 o 2 frases.`;
+- oportunidad: el cliente quiere comprar o está listo para pagar y nadie lo está aprovechando.
+- cobro: reclama un cobro o dice que pagó y no se refleja.
+level "urgente" solo si hay que actuar hoy. message: qué pasó y qué debería hacer el dueño, en 1 o 2 frases.`;
 
 /** Revisa la última respuesta del equipo en un chat real y dice si hay que avisar. */
 export async function reviewAttention(input: {
@@ -479,20 +455,17 @@ export async function reviewAttention(input: {
 
 /** Qué responderle al cliente, con el contexto del CRM, de Metrics y del historial. */
 export async function recommendReply(input: {
-  business: string;
+  negocio: ContextoNegocio;
   client: ClientDoc;
   totalConversations: number;
   current: ConversationWithMessages | null;
   previous: ConversationWithMessages[];
-  metrics: ContextoMetrics;
-  cobros: CobroEntorno[];
   instruction?: string;
 }): Promise<{ data: Recommendation; usage: AiUsage }> {
   const sections: string[] = [
-    `<ficha_crm>\n${formatClient(input.client, input.totalConversations)}\n</ficha_crm>`,
-    formatMetrics(input.metrics),
-    formatCobros(input.cobros),
-  ].filter(Boolean);
+    formatNegocio(input.negocio),
+    `<ficha_lead>\n${formatClient(input.client, input.totalConversations)}\n</ficha_lead>`,
+  ];
 
   if (input.previous.length) {
     sections.push(
@@ -504,26 +477,27 @@ export async function recommendReply(input: {
   sections.push(
     input.current
       ? formatConversation(input.current, "conversacion_actual")
-      : "<conversacion_actual>Todavía no hay mensajes registrados con este cliente.</conversacion_actual>",
+      : "<conversacion_actual>Todavía no hay mensajes registrados con este lead.</conversacion_actual>",
   );
   sections.push(`Ahora es ${formatDate(new Date())} (hora de Ecuador).`);
   if (input.instruction) {
-    sections.push(`<pedido_del_operador>\n${input.instruction}\n</pedido_del_operador>`);
+    sections.push(`<pedido_de_quien_vende>\n${input.instruction}\n</pedido_de_quien_vende>`);
   }
-  sections.push("Qué le respondemos al cliente?");
+  sections.push("Qué le respondemos al lead para cerrar la venta?");
 
   const result = await generarObjeto({
-    system: RECOMMENDATION_SYSTEM.replace(
-      "{business}",
-      input.business ||
-        "Todavía no se configuró. No afirmes precios ni condiciones; pídelos entre corchetes y avisa en alerts que falta configurar /negocio.",
-    ),
+    system: RECOMMENDATION_SYSTEM,
     content: [{ type: "text", text: sections.join("\n\n") }],
     schema: recommendationSchema,
     name: "recomendacion",
   });
   // Por si el modelo se salta la regla: sin signos de apertura ni markdown en lo que se copia.
   result.data.replies = result.data.replies.map((r) => ({ ...r, text: limpiarRespuesta(r.text) }));
+  result.data.pago.mensaje = limpiarRespuesta(result.data.pago.mensaje);
+  result.data.cierre.probabilidad = Math.max(
+    0,
+    Math.min(100, Math.round(result.data.cierre.probabilidad)),
+  );
   return result;
 }
 
