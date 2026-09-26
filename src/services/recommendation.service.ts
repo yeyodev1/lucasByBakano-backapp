@@ -8,6 +8,7 @@ import { OperatorDoc } from "./operator.service";
 import { CobroEntorno, cobroDeEntorno } from "./finances.service";
 import { ContextoMetrics, contextoDeCliente } from "./metrics.service";
 import { avisarEquipo } from "./alert.service";
+import { linkIntegraciones } from "./crm.service";
 import { BUSINESS_KEY, getSetting } from "./setting.service";
 import { escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
@@ -52,7 +53,22 @@ export function metricsLine(metrics: ContextoMetrics): string {
           `alertó al equipo (${escapeHtml(e.bot.alertaEstado)}) ${haceCuanto(e.bot.alertoEquipoEn)}`,
         );
       }
-      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}${
+      const crm = !e.crm
+        ? "\n🔌 <i>CRM sin conectar</i>"
+        : e.crm.estado !== "conectado"
+          ? "\n🔌 <i>CRM con error, hay que reconectarlo</i>"
+          : `\n🔌 CRM conectado · WhatsApp ${
+              e.crm.whatsapp === "conectado"
+                ? "✅"
+                : e.crm.whatsapp === "no_detectado"
+                  ? "❌ no detectado"
+                  : "❔"
+            }`;
+      const cierres = e.hallazgos.filter((h) => h.tipo === "cierre_casi_solo").length;
+      const perdidos = cierres
+        ? `\n🎯 <b>${cierres}</b> cierre${cierres === 1 ? "" : "s"} casi solo${cierres === 1 ? "" : "s"} sin cerrar esta semana`
+        : "";
+      return `${estado}: <b>${escapeHtml(e.nombre)}</b>${duda}${crm}${perdidos}${
         bot.length ? `\n🤖 <i>El bot de Bakano ${bot.join(" y ")}</i>` : ""
       }`;
     })
@@ -126,6 +142,14 @@ export async function clientCard(
     keyboard: [
       [{ text: "💡 Sugerir respuesta", callback_data: `sug:${client._id}` }],
       ...cobroKeyboard(cobros),
+      ...(metrics.estado === "encontrado"
+        ? metrics.entornos
+            .filter((e) => !e.crm || e.crm.estado !== "conectado")
+            .slice(0, 2)
+            .map((e) => [
+              { text: `🔌 Conectar CRM · ${e.nombre.slice(0, 30)}`, url: linkIntegraciones(e.id) },
+            ])
+        : []),
     ],
   };
 }
