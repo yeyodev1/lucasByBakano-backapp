@@ -23,10 +23,11 @@ import {
 } from "./client.service";
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { resumenCrm } from "./crm.service";
-import { buscarEntornos } from "./metrics.service";
+import { PerfilNegocio, buscarEntornos } from "./metrics.service";
 import {
   actualizarNegocio,
   agregarRegla,
+  contextoDeNegocio,
   crearNegocio,
   getNegocio,
   listarNegocios,
@@ -310,6 +311,22 @@ async function requireActiveClient(operator: OperatorDoc): Promise<Types.ObjectI
   return null;
 }
 
+/** Lo que Metrics ya sabe del negocio, para no pedirlo dos veces. */
+function resumenPerfilMetrics(p: PerfilNegocio | null): string {
+  if (!p) return "";
+  return [
+    p.descripcion && `• Qué es: ${p.descripcion}`,
+    p.productosServicios && `• Qué vendes: ${p.productosServicios}`,
+    p.ticketPromedio && `• Ticket promedio: ${p.ticketPromedio}`,
+    p.publicoObjetivo && `• A quién le vendes: ${p.publicoObjetivo}`,
+    p.propuestaValor && `• Por qué eres distinto: ${p.propuestaValor}`,
+    p.porQueTeCompran && `• Por qué te compran: ${p.porQueTeCompran}`,
+  ]
+    .filter(Boolean)
+    .map((l) => String(l).slice(0, 300))
+    .join("\n");
+}
+
 /** Configurar el negocio: el dueño o el equipo de Bakano, no los vendedores. */
 async function puedeConfigurar(operator: OperatorDoc): Promise<boolean> {
   if (operator.role !== "vendedor") return true;
@@ -508,30 +525,39 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     case "negocio": {
       const negocioId = await requireNegocio(operator);
       if (!negocioId) return;
-      const negocio = await getNegocio(negocioId);
+      const { negocio, perfil } = await contextoDeNegocio(negocioId);
       if (!args) {
+        const deMetrics = resumenPerfilMetrics(perfil);
+        const partes = [
+          deMetrics &&
+            `<b>Esto ya lo sé por tu perfil en Metrics</b> (no hace falta repetirlo):\n${escapeHtml(deMetrics)}`,
+          negocio.info && `<b>Precios y condiciones que me contaste:</b>\n${escapeHtml(negocio.info)}`,
+        ].filter(Boolean);
         await sendMessage(
           chatId,
-          negocio?.info
-            ? `<b>Lo que sé de ${escapeHtml(negocio.nombre)}:</b>\n\n${escapeHtml(negocio.info)}\n\nPara reemplazarlo: /negocio <texto completo>`
+          partes.length
+            ? `${partes.join("\n\n")}\n\n${negocio.info ? "Para reemplazar tus precios y condiciones" : "Cuéntame solo lo que falta: precios, cómo entregas, horarios, zonas y garantías"}: /negocio <texto completo>\n\nTodo lo que me cuentes queda también en tu perfil de Metrics.`
             : "Cuéntame de tu negocio en un solo mensaje: qué vendes, precios, cómo entregas, horarios, zonas, garantías y cualquier condición. Ej:\n<code>/negocio Vendemos tortas personalizadas desde $25, entregas en Cuenca de martes a sábado, pedidos con 2 días de anticipación…</code>\n\nMientras no lo tenga, no afirmo precios.",
         );
         return;
       }
       if (!(await puedeConfigurar(operator))) return;
       await actualizarNegocio(negocioId, { info: args });
-      await sendMessage(chatId, "✅ Guardado. Desde ahora recomiendo con esta información.");
+      await sendMessage(
+        chatId,
+        `✅ Guardado. Desde ahora recomiendo con esta información${negocio.workspaceId ? " y quedó también en tu perfil de Metrics" : ""}.`,
+      );
       return;
     }
 
     case "pago": {
       const negocioId = await requireNegocio(operator);
       if (!negocioId) return;
-      const negocio = await getNegocio(negocioId);
+      const { negocio } = await contextoDeNegocio(negocioId);
       if (!args) {
         await sendMessage(
           chatId,
-          negocio?.datosPago
+          negocio.datosPago
             ? `<b>Tus datos de pago:</b>\n\n<code>${escapeHtml(negocio.datosPago)}</code>\n\nPara cambiarlos: /pago <texto completo>`
             : "Mándame tus datos de pago tal como se los mandas a tus clientes. Ej:\n<code>/pago Transferencia Banco Pichincha, cta. corriente 2201234567, a nombre de Dulce Hogar, RUC 0102030405001. También aceptamos De Una al 0991234567.</code>",
         );
@@ -541,7 +567,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await actualizarNegocio(negocioId, { datosPago: args });
       await sendMessage(
         chatId,
-        "✅ Guardado. Cuando un cliente esté listo para pagar, te doy el mensaje con estos datos.",
+        `✅ Guardado${negocio.workspaceId ? " aquí y en tu perfil de Metrics" : ""}. Cuando un cliente esté listo para pagar, te doy el mensaje con estos datos.`,
       );
       return;
     }
@@ -568,8 +594,8 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     case "reglas": {
       const negocioId = await requireNegocio(operator);
       if (!negocioId) return;
-      const negocio = await getNegocio(negocioId);
-      const reglas = negocio?.reglas ?? [];
+      const { negocio } = await contextoDeNegocio(negocioId);
+      const reglas = negocio.reglas;
       if (!reglas.length) {
         await sendMessage(chatId, "Todavía no tienes reglas. Agrega una con /regla <texto>.");
         return;

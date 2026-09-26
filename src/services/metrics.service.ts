@@ -1,3 +1,4 @@
+import axios from "axios";
 import mongoose, { Connection, Types } from "mongoose";
 import { env } from "../config/env";
 import { normalizePhone } from "../models/client.model";
@@ -432,6 +433,11 @@ export interface PerfilNegocio {
   ticketPromedio: string;
   porQueTeCompran: string;
   trafficDirection: string;
+  // Ventas por WhatsApp: lo mismo que /negocio, /pago y /regla, guardado en Metrics.
+  infoVentas: string;
+  datosPago: string;
+  reglasVenta: string[];
+  ventasActualizadoEn: Date | null;
 }
 
 /** Perfil de marca del negocio en Metrics: lo que Lucas sabe de lo que vende. */
@@ -462,10 +468,36 @@ export async function perfilDeEntorno(workspaceId: string): Promise<PerfilNegoci
       ticketPromedio: texto(b.ticketPromedio),
       porQueTeCompran: texto(b.porQueTeCompran),
       trafficDirection: texto(b.trafficDirection),
+      infoVentas: String(b.infoVentas ?? ""),
+      datosPago: String(b.datosPago ?? ""),
+      reglasVenta: Array.isArray(b.reglasVenta) ? b.reglasVenta.map(String) : [],
+      ventasActualizadoEn: b.ventasActualizadoEn ? new Date(b.ventasActualizadoEn) : null,
     };
   } catch (error: any) {
     console.error("[metrics] perfil:", error?.message ?? error);
     return null;
+  }
+}
+
+/**
+ * Guarda en Metrics lo que el negocio le contó a Lucas, para que los dos
+ * tengan la misma información. Si falla, Lucas sigue con su copia y lo
+ * reintenta la próxima vez que cambie algo.
+ */
+export async function guardarVentasEnMetrics(
+  workspaceId: string,
+  ventas: { infoVentas?: string; datosPago?: string; reglasVenta?: string[] },
+): Promise<boolean> {
+  if (!workspaceId || !env.METRICS_SYNC_KEY) return false;
+  try {
+    await axios.put(`${env.METRICS_API_URL}/lucas/negocio/${workspaceId}`, ventas, {
+      headers: { "x-metrics-key": env.METRICS_SYNC_KEY },
+      timeout: 15_000,
+    });
+    return true;
+  } catch (error: any) {
+    console.error("[metrics] guardar ventas:", error?.response?.status ?? error?.message ?? error);
+    return false;
   }
 }
 

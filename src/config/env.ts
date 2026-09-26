@@ -58,6 +58,10 @@ export const env = {
   // llave (x-metrics-key) que usa Metrics para el portal de facturación.
   FINANCES_API_URL: optional("FINANCES_API_URL", ""),
   FINANCES_PORTAL_KEY: optional("FINANCES_PORTAL_KEY", ""),
+  // API de Metrics para guardar lo que el negocio cuenta con /negocio, /pago y /regla.
+  // La llave es METRICS_PROXY_KEY de Metrics (la misma de Finanzas si no se define aparte).
+  METRICS_API_URL: optional("METRICS_API_URL", "https://ads-bakano-clients-backapp.vercel.app/api"),
+  METRICS_SYNC_KEY: optional("METRICS_SYNC_KEY", process.env.FINANCES_PORTAL_KEY?.trim() || ""),
   // A dónde vuelve el cliente después de pagar en Stripe.
   PAGO_RETURN_URL: optional("PAGO_RETURN_URL", "https://bakano.ec"),
   // Minutos que un cliente puede esperar respuesta en Telegram Business antes de avisar al equipo.
