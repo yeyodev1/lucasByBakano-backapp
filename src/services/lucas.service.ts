@@ -3,7 +3,8 @@ import { env } from "../config/env";
 import { CustomError } from "../errors/customError.error";
 import { CLIENT_STAGES } from "../models/client.model";
 import { TelegramUpdate } from "../models/telegramUpdate.model";
-import { TgCallbackQuery, TgMessage, TgUpdate } from "../types/telegram";
+import { TgCallbackQuery, TgInlineKeyboard, TgMessage, TgUpdate } from "../types/telegram";
+import { describirDestino, setAlertChat } from "./alert.service";
 import {
   handleBusinessMessage,
   handleCapture,
@@ -16,47 +17,80 @@ import {
   createClient,
   getClientById,
   isValidStage,
+  leadsCalientes,
   searchClients,
   updateClient,
 } from "./client.service";
+import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
+import { resumenCrm } from "./crm.service";
+import { buscarEntornos } from "./metrics.service";
+import {
+  actualizarNegocio,
+  agregarRegla,
+  crearNegocio,
+  getNegocio,
+  listarNegocios,
+  negocioPorCodigo,
+  quitarRegla,
+} from "./negocio.service";
 import {
   findByBusinessConnection,
   findOperator,
   linkOperator,
   OperatorDoc,
+  rolParaNegocio,
   setBusinessConnection,
   updateOperator,
 } from "./operator.service";
-import { clientCard, markChosen, recommendForClient, stageLabel } from "./recommendation.service";
-import { describirDestino, setAlertChat } from "./alert.service";
-import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
-import { resumenCrm } from "./crm.service";
-import { BUSINESS_KEY, getSetting, setSetting } from "./setting.service";
+import {
+  barraCierre,
+  clientCard,
+  markChosen,
+  recommendForClient,
+  stageLabel,
+  temperaturaLabel,
+} from "./recommendation.service";
 import { answerCallback, escapeHtml, removeKeyboard, sendMessage } from "./telegram.service";
 
-const HELP = `Soy <b>Lucas</b> 🧠, tu copiloto de ventas. Leo tus conversaciones con clientes, reviso el CRM y te digo qué responder.
+const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversación con tu cliente y te digo qué responderle para cerrar la venta, qué tan cerca estás y cuándo mandarle el pago.
 
 <b>Cómo pasarme una conversación</b>
-📸 Mándame una <b>captura</b> del chat (WhatsApp, Instagram, lo que sea). Puedes escribir en el pie de foto quién es o qué necesitas: <i>"es María de Construmia, quiere descuento"</i>.
-📋 <b>Pega</b> la conversación como texto.
-↪️ <b>Reenvíame</b> mensajes de un chat de Telegram.
-🔗 Conéctame en <b>Telegram Business</b> (Ajustes → Telegram Business → Chatbots → @LucasByBakanoBot) y leo tus chats privados solo, sin responder nunca a tus clientes.
+📸 Mándame una <b>captura</b> del chat de WhatsApp. En el pie de foto puedes contarme algo: <i>"quiere 2 tortas para el sábado, qué le digo"</i>.
+📋 O <b>pega</b> la conversación como texto.
+↪️ O <b>reenvíame</b> los mensajes si el cliente te escribió por Telegram.
 
-<b>Comandos</b>
-/cliente <i>nombre o teléfono</i>: buscar y elegir cliente
-/nuevo <i>nombre | teléfono</i>: crear cliente
-/ficha: ver la ficha del cliente activo
-/sugerir <i>[n] [instrucción]</i>: qué responder. <i>/sugerir 0</i> lee solo la conversación actual; <i>/sugerir 5 quiere precio</i> lee 5 anteriores y toma en cuenta tu pedido
+<b>Lo que te devuelvo</b>
+🔥 Qué tan cerca estás de cerrar y qué falta
+💬 2 o 3 respuestas listas para copiar
+💳 Si ya es momento de mandarle el pago, el mensaje con tus datos de pago
+
+<b>Configura tu negocio</b> (una sola vez)
+/negocio <i>texto</i>: qué vendes, precios, entregas, condiciones
+/pago <i>texto</i>: tus datos de pago (cuentas, link, Payphone, De Una…)
+/regla <i>texto</i>: una regla que siempre respeto, por ejemplo <i>no se envían proformas para montos menores a $500</i>
+/reglas: ver y quitar reglas
+
+<b>Tus clientes</b>
+/calientes: los que están más cerca de comprar
+/cliente <i>nombre o teléfono</i>: buscar y elegir
+/nuevo <i>nombre | teléfono</i>: crear
+/ficha · /nota <i>texto</i> · /etapa
+/sugerir <i>[n] [pedido]</i>: qué responder; <i>/sugerir 0</i> lee solo la conversación actual
 /contexto <i>n</i>: cuántas conversaciones anteriores leo por defecto
-/nota <i>texto</i>: nota en la ficha
-/etapa <i>etapa</i>: ${CLIENT_STAGES.join(", ")}
-/negocio <i>texto</i>: qué vendemos, precios y condiciones (sin esto no afirmo precios)
-/alertas: a dónde y cuándo aviso al equipo. Agrégame a un grupo del equipo y escribe ahí /alertasaqui para que los avisos lleguen al grupo
-/crm: qué clientes tienen su CRM (GoHighLevel) y WhatsApp conectados, y quiénes dejaron ir leads
-/cobros: quién le debe a Bakano, con botón para generar el link de pago
 /soltar: dejar el cliente activo
 
-Si el cliente ya está en Metrics te digo si su entorno está activo y si tiene saldo pendiente. Con el botón 💳 te genero el link de pago de Stripe y el mensaje listo para mandarle.`;
+/alertas: cuándo te aviso (clientes sin respuesta, ventas que se escapan, mala atención). Agrégame a un grupo de tu equipo y escribe ahí /alertasaqui`;
+
+const HELP_BAKANO = `\n\n<b>Equipo Bakano</b>
+/alta <i>nombre del negocio</i>: dar de alta a un cliente en Lucas y obtener su código
+/negocios: ver los negocios y entrar a uno para configurarlo o probar
+/codigo: código de vinculación del negocio en el que estás
+/cobros: quién le debe a Bakano
+/crm: CRM y WhatsApp conectados de los clientes, y leads que dejaron ir`;
+
+function ayuda(operator: OperatorDoc): string {
+  return operator.role === "bakano" ? HELP + HELP_BAKANO : HELP;
+}
 
 /** Punto de entrada de cada update de Telegram (webhook o polling). */
 export async function handleUpdate(update: TgUpdate): Promise<void> {
@@ -72,9 +106,9 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
     const conn = update.business_connection;
     const operator = await setBusinessConnection(conn.user.id, conn.id, conn.is_enabled);
     const text = !operator
-      ? `Primero vincúlate conmigo: abre este chat y manda /vincular <código>. Después vuelve a conectarme en Telegram Business.`
+      ? "Primero vincúlate conmigo: abre este chat y manda /vincular <código de tu negocio>. Después vuelve a conectarme en Telegram Business."
       : conn.is_enabled
-        ? "🔗 Listo, ya leo tus chats privados. Cuando un cliente te escriba te aviso aquí y te digo qué responder. Nunca le escribo al cliente."
+        ? "🔗 Listo, ya leo tus chats de Telegram. Cuando un cliente te escriba te aviso aquí y te digo qué responder. Nunca le escribo al cliente."
         : "🔌 Me desconectaste de Telegram Business. Ya no leo tus chats.";
     await sendMessage(conn.user_chat_id, text).catch(() => {});
     return;
@@ -82,7 +116,7 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 
   if (update.business_message?.business_connection_id) {
     const operator = await findByBusinessConnection(update.business_message.business_connection_id);
-    if (operator) await handleBusinessMessage(operator, update.business_message);
+    if (operator?.negocio) await handleBusinessMessage(operator, update.business_message);
     return;
   }
 
@@ -93,7 +127,7 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 
   const message = update.message;
   if (!message?.from) return;
-  // En grupos Lucas no conversa: solo acepta el registro del grupo de alertas.
+  // En grupos Lucas no conversa: solo acepta el registro del grupo de avisos.
   if (message.chat.type !== "private") {
     await handleGroupMessage(message).catch((error) => console.error("[lucas] grupo:", error));
     return;
@@ -107,25 +141,34 @@ export async function handleUpdate(update: TgUpdate): Promise<void> {
 }
 
 /**
- * /alertasaqui <código> en un grupo del equipo: desde ahí llegan los avisos
- * (mala atención, clientes sin respuesta, clientes molestos, oportunidades).
+ * /alertasaqui en un grupo: los avisos del negocio (o del equipo de Bakano)
+ * llegan ahí en vez del chat privado del dueño.
  */
 async function handleGroupMessage(message: TgMessage): Promise<void> {
   const parsed = parseCommand(message.text?.trim() ?? "");
   if (parsed?.command !== "alertasaqui") return;
   const operator = await findOperator(message.from!.id);
-  const codigoOk = env.TELEGRAM_LINK_CODE && parsed.args === env.TELEGRAM_LINK_CODE;
-  if (!operator && !codigoOk) {
+  if (!operator || (operator.role !== "bakano" && !operator.negocio)) {
     await sendMessage(
       message.chat.id,
-      "Solo un operador vinculado a Lucas puede registrar este grupo.",
+      "Primero vincúlate conmigo por chat privado con /vincular <código>.",
     );
     return;
   }
-  await setAlertChat(message.chat.id, operator?.name ?? message.from!.first_name);
+  if (operator.role === "vendedor") {
+    await sendMessage(
+      message.chat.id,
+      "Solo el dueño del negocio puede registrar el grupo de avisos.",
+    );
+    return;
+  }
+  const negocioId = operator.role === "bakano" ? null : operator.negocio;
+  await setAlertChat(negocioId, message.chat.id, operator.name);
   await sendMessage(
     message.chat.id,
-    "📣 Listo, desde ahora aviso aquí al equipo: clientes sin respuesta, atención a revisar, clientes molestos o en riesgo, oportunidades y cobros.",
+    negocioId
+      ? "📣 Listo, desde ahora aviso aquí: clientes sin respuesta, ventas que se están escapando, mala atención y clientes molestos."
+      : "📣 Listo, este es el grupo de avisos del equipo de Bakano.",
   );
 }
 
@@ -152,39 +195,80 @@ function parseCommand(text: string): { command: string; args: string } | null {
   return { command: match[1].toLowerCase(), args: match[2].trim() };
 }
 
+/**
+ * /vincular con el código de un negocio (dueño o vendedor) o con el código
+ * interno de Bakano (equipo). Sirve también para cambiarse de negocio.
+ */
+async function vincular(message: TgMessage, codigo: string): Promise<OperatorDoc | null> {
+  const from = message.from!;
+  const chatId = message.chat.id;
+
+  if (env.TELEGRAM_LINK_CODE && codigo === env.TELEGRAM_LINK_CODE) {
+    const operator = await linkOperator(from, chatId, { negocio: null, role: "bakano" });
+    await sendMessage(
+      chatId,
+      `✅ Listo, ${escapeHtml(from.first_name)}. Entraste como equipo de Bakano.\n\nDa de alta a un cliente con /alta <nombre> o entra a uno con /negocios.${HELP_BAKANO}`,
+    );
+    return operator;
+  }
+
+  const negocio = await negocioPorCodigo(codigo);
+  if (!negocio) {
+    await sendMessage(chatId, "Ese código no es válido. Pídeselo a tu asesor de Bakano.");
+    return null;
+  }
+  const role = await rolParaNegocio(negocio._id);
+  const operator = await linkOperator(from, chatId, { negocio: negocio._id, role });
+  await sendMessage(
+    chatId,
+    `✅ Listo, ${escapeHtml(from.first_name)}. Ya trabajo para <b>${escapeHtml(negocio.nombre)}</b>${
+      role === "dueno" ? " (como dueño)" : ""
+    }.\n\n${HELP}`,
+  );
+  return operator;
+}
+
 async function handlePrivateMessage(message: TgMessage): Promise<void> {
   const from = message.from!;
   const chatId = message.chat.id;
   const text = message.text?.trim() ?? "";
   const parsed = parseCommand(text);
 
-  let operator = await findOperator(from.id);
-
-  if (!operator) {
-    if (parsed?.command === "vincular") {
-      if (!env.TELEGRAM_LINK_CODE || parsed.args !== env.TELEGRAM_LINK_CODE) {
-        await sendMessage(chatId, "Ese código no es válido. Pídeselo al administrador de Lucas.");
-        return;
-      }
-      operator = await linkOperator(from, chatId);
+  if (parsed?.command === "vincular") {
+    if (!parsed.args) {
       await sendMessage(
         chatId,
-        `✅ Listo, ${escapeHtml(from.first_name)}. Ya trabajamos juntos.\n\n${HELP}`,
+        "Mándame el código de tu negocio así: <code>/vincular código</code>",
       );
       return;
     }
+    await vincular(message, parsed.args.trim());
+    return;
+  }
+
+  let operator = await findOperator(from.id);
+  if (!operator) {
     await sendMessage(
       chatId,
-      `Hola, soy Lucas 🧠, el copiloto de ventas del equipo. Para usarme manda:\n<code>/vincular código</code>\n\nTu id de Telegram es <code>${from.id}</code>.`,
+      "Hola, soy Lucas 🧠, el agente de ventas de Bakano. Te ayudo a cerrar tus ventas por WhatsApp.\n\nPara empezar manda el código que te dio tu asesor de Bakano:\n<code>/vincular código</code>",
     );
     return;
   }
 
-  // El chat puede cambiar si el operador reinstaló Telegram.
+  // El chat puede cambiar si reinstaló Telegram.
   if (operator.telegramChatId !== chatId) operator = await linkOperator(from, chatId);
 
   if (parsed) {
     await handleCommand(operator, parsed.command, parsed.args);
+    return;
+  }
+  if (!operator.negocio) {
+    await sendMessage(
+      chatId,
+      operator.role === "bakano"
+        ? "Para probar capturas entra primero a un negocio con /negocios."
+        : "No estás vinculado a ningún negocio. Usa /vincular <código>.",
+    );
     return;
   }
   if (message.forward_origin) {
@@ -205,13 +289,38 @@ async function handlePrivateMessage(message: TgMessage): Promise<void> {
   );
 }
 
+async function requireNegocio(operator: OperatorDoc): Promise<Types.ObjectId | null> {
+  if (operator.negocio) return operator.negocio;
+  await sendMessage(
+    operator.telegramChatId,
+    operator.role === "bakano"
+      ? "Primero entra a un negocio con /negocios."
+      : "No estás vinculado a ningún negocio. Usa /vincular <código>.",
+  );
+  return null;
+}
+
 async function requireActiveClient(operator: OperatorDoc): Promise<Types.ObjectId | null> {
+  if (!(await requireNegocio(operator))) return null;
   if (operator.activeClientId) return operator.activeClientId;
   await sendMessage(
     operator.telegramChatId,
     "Primero elige un cliente con /cliente <nombre o teléfono>.",
   );
   return null;
+}
+
+/** Configurar el negocio: el dueño o el equipo de Bakano, no los vendedores. */
+async function puedeConfigurar(operator: OperatorDoc): Promise<boolean> {
+  if (operator.role !== "vendedor") return true;
+  await sendMessage(operator.telegramChatId, "Eso lo configura el dueño del negocio.");
+  return false;
+}
+
+async function requireBakano(operator: OperatorDoc): Promise<boolean> {
+  if (operator.role === "bakano") return true;
+  await sendMessage(operator.telegramChatId, "No conozco ese comando. Mira /ayuda.");
+  return false;
 }
 
 async function handleCommand(operator: OperatorDoc, command: string, args: string): Promise<void> {
@@ -221,24 +330,24 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     case "start":
     case "ayuda":
     case "help":
-      await sendMessage(chatId, HELP);
+      await sendMessage(chatId, ayuda(operator));
       return;
 
-    case "vincular":
-      await sendMessage(chatId, "Ya estás vinculado 👍");
-      return;
+    // ─── Leads ────────────────────────────────────────────────────────────────
 
     case "cliente": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
       if (!args) {
         if (!operator.activeClientId) {
           await sendMessage(chatId, "Dime a quién busco: /cliente María o /cliente 0991234567");
           return;
         }
-        const card = await clientCard(await getClientById(operator.activeClientId));
+        const card = await clientCard(await getClientById(operator.activeClientId, negocioId));
         await sendMessage(chatId, card.html, card.keyboard);
         return;
       }
-      const results = await searchClients(args);
+      const results = await searchClients(args, negocioId);
       if (!results.length) {
         await sendMessage(chatId, `No encontré a "${escapeHtml(args)}".`, [
           [
@@ -268,12 +377,19 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     }
 
     case "nuevo": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
       const [name, phone] = args.split("|").map((s) => s.trim());
       if (!name) {
         await sendMessage(chatId, "Uso: /nuevo María Pérez | 0991234567");
         return;
       }
-      const client = await createClient({ name, phones: phone ? [phone] : [], source: "telegram" });
+      const client = await createClient({
+        negocio: negocioId,
+        name,
+        phones: phone ? [phone] : [],
+        source: "telegram",
+      });
       await selectClient(operator, client._id, "🆕 Cliente creado.");
       return;
     }
@@ -281,8 +397,37 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
     case "ficha": {
       const clientId = await requireActiveClient(operator);
       if (!clientId) return;
-      const card = await clientCard(await getClientById(clientId));
+      const card = await clientCard(await getClientById(clientId, operator.negocio));
       await sendMessage(chatId, card.html, card.keyboard);
+      return;
+    }
+
+    case "calientes": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      const leads = await leadsCalientes(negocioId);
+      if (!leads.length) {
+        await sendMessage(
+          chatId,
+          "Todavía no tengo clientes medidos en los últimos 14 días. Mándame una captura de una conversación y empiezo.",
+        );
+        return;
+      }
+      const lines = ["🔥 <b>Los más cerca de comprar</b>", ""];
+      for (const l of leads) {
+        lines.push(
+          `${temperaturaLabel(l.cierre.temperatura)} · <b>${escapeHtml(l.name)}</b>\n${barraCierre(l.cierre.probabilidad)}${
+            l.cierre.falta?.length ? `\n<i>Falta: ${escapeHtml(l.cierre.falta.join(", "))}</i>` : ""
+          }`,
+        );
+      }
+      await sendMessage(
+        chatId,
+        lines.join("\n\n"),
+        leads
+          .slice(0, 8)
+          .map((l) => [{ text: `💡 ${l.name.slice(0, 40)}`, callback_data: `sug:${l._id}` }]),
+      );
       return;
     }
 
@@ -321,10 +466,12 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
 
     case "nota": {
       const clientId = await requireActiveClient(operator);
-      if (!clientId || !args) {
-        if (clientId) await sendMessage(chatId, "Uso: /nota Prefiere que le escriban en la tarde");
+      if (!clientId) return;
+      if (!args) {
+        await sendMessage(chatId, "Uso: /nota Prefiere que le escriban en la tarde");
         return;
       }
+      await getClientById(clientId, operator.negocio);
       const client = await addNote(clientId, args, operator.name);
       await sendMessage(chatId, `📝 Nota guardada en <b>${escapeHtml(client.name)}</b>.`);
       return;
@@ -342,6 +489,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
         );
         return;
       }
+      await getClientById(clientId, operator.negocio);
       const client = await updateClient(clientId, { stage });
       await sendMessage(
         chatId,
@@ -350,47 +498,177 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       return;
     }
 
+    case "soltar":
+      await updateOperator(operator._id, { activeClientId: null, pendingAction: "" });
+      await sendMessage(chatId, "Listo, sin cliente activo.");
+      return;
+
+    // ─── Configuración del negocio ───────────────────────────────────────────
+
     case "negocio": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      const negocio = await getNegocio(negocioId);
       if (!args) {
-        const business = await getSetting(BUSINESS_KEY);
         await sendMessage(
           chatId,
-          business
-            ? `<b>Lo que sé del negocio:</b>\n\n${escapeHtml(business)}\n\nPara reemplazarlo: /negocio <texto completo>`
-            : "Todavía no sé qué vendemos. Mándame /negocio con los servicios, precios, condiciones y el tono con el que hablamos. Mientras tanto no afirmo precios.",
+          negocio?.info
+            ? `<b>Lo que sé de ${escapeHtml(negocio.nombre)}:</b>\n\n${escapeHtml(negocio.info)}\n\nPara reemplazarlo: /negocio <texto completo>`
+            : "Cuéntame de tu negocio en un solo mensaje: qué vendes, precios, cómo entregas, horarios, zonas, garantías y cualquier condición. Ej:\n<code>/negocio Vendemos tortas personalizadas desde $25, entregas en Cuenca de martes a sábado, pedidos con 2 días de anticipación…</code>\n\nMientras no lo tenga, no afirmo precios.",
         );
         return;
       }
-      await setSetting(BUSINESS_KEY, args, operator.name);
+      if (!(await puedeConfigurar(operator))) return;
+      await actualizarNegocio(negocioId, { info: args });
       await sendMessage(chatId, "✅ Guardado. Desde ahora recomiendo con esta información.");
+      return;
+    }
+
+    case "pago": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      const negocio = await getNegocio(negocioId);
+      if (!args) {
+        await sendMessage(
+          chatId,
+          negocio?.datosPago
+            ? `<b>Tus datos de pago:</b>\n\n<code>${escapeHtml(negocio.datosPago)}</code>\n\nPara cambiarlos: /pago <texto completo>`
+            : "Mándame tus datos de pago tal como se los mandas a tus clientes. Ej:\n<code>/pago Transferencia Banco Pichincha, cta. corriente 2201234567, a nombre de Dulce Hogar, RUC 0102030405001. También aceptamos De Una al 0991234567.</code>",
+        );
+        return;
+      }
+      if (!(await puedeConfigurar(operator))) return;
+      await actualizarNegocio(negocioId, { datosPago: args });
+      await sendMessage(
+        chatId,
+        "✅ Guardado. Cuando un cliente esté listo para pagar, te doy el mensaje con estos datos.",
+      );
+      return;
+    }
+
+    case "regla": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      if (!args) {
+        await sendMessage(
+          chatId,
+          "Escríbeme la regla que siempre debo respetar. Ej:\n<code>/regla No se envían proformas para montos menores a $500</code>",
+        );
+        return;
+      }
+      if (!(await puedeConfigurar(operator))) return;
+      const reglas = await agregarRegla(negocioId, args);
+      await sendMessage(
+        chatId,
+        `✅ Regla guardada. Ahora tengo ${reglas.length} regla${reglas.length === 1 ? "" : "s"}. Míralas con /reglas.`,
+      );
+      return;
+    }
+
+    case "reglas": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      const negocio = await getNegocio(negocioId);
+      const reglas = negocio?.reglas ?? [];
+      if (!reglas.length) {
+        await sendMessage(chatId, "Todavía no tienes reglas. Agrega una con /regla <texto>.");
+        return;
+      }
+      const keyboard: TgInlineKeyboard =
+        operator.role === "vendedor"
+          ? []
+          : reglas.map((r, i) => [{ text: `🗑️ Quitar ${i + 1}`, callback_data: `qregla:${i}` }]);
+      await sendMessage(
+        chatId,
+        `<b>Reglas que siempre respeto</b>\n\n${reglas.map((r, i) => `${i + 1}. ${escapeHtml(r)}`).join("\n")}`,
+        keyboard,
+      );
       return;
     }
 
     case "alertas":
       await sendMessage(
         chatId,
-        `📣 Los avisos al equipo van ${await describirDestino()}.\n\nAviso cuando un cliente lleva más de ${env.LUCAS_SLA_MINUTOS} min sin respuesta, cuando veo mala atención, clientes molestos o en riesgo, oportunidades de venta y reclamos de cobro.`,
+        `📣 Los avisos llegan ${await describirDestino(operator.role === "bakano" ? null : operator.negocio)}.\n\nTe aviso cuando un cliente lleva más de ${env.LUCAS_SLA_MINUTOS} min sin respuesta, cuando una venta se está escapando, cuando veo mala atención y cuando un cliente está molesto.`,
       );
       return;
 
     case "alertasaqui":
       await sendMessage(
         chatId,
-        "Ese comando se usa dentro del grupo del equipo, después de agregarme al grupo.",
+        "Ese comando se usa dentro del grupo de tu equipo, después de agregarme al grupo.",
       );
       return;
 
-    case "crm":
-      await resumenCrm(operator);
+    // ─── Equipo Bakano ───────────────────────────────────────────────────────
+
+    case "alta": {
+      if (!(await requireBakano(operator))) return;
+      if (!args) {
+        await sendMessage(chatId, "Uso: /alta Pastelería Dulce Hogar");
+        return;
+      }
+      const entornos = await buscarEntornos(args).catch(() => []);
+      await updateOperator(operator._id, {
+        pendingAction: JSON.stringify({ kind: "alta", nombre: args }),
+      });
+      const keyboard: TgInlineKeyboard = entornos.map((e) => [
+        {
+          text: `🔗 ${e.nombre.slice(0, 40)}${e.activo ? "" : " (inactivo)"}`,
+          callback_data: `alta:${e.id}`,
+        },
+      ]);
+      keyboard.push([{ text: "➕ Crear sin entorno de Metrics", callback_data: "alta:-" }]);
+      await sendMessage(
+        chatId,
+        entornos.length
+          ? `Encontré estos entornos en Metrics. Si es uno de ellos, lo enlazo y Lucas toma de ahí sus productos, ticket y tono:`
+          : `No encontré "${escapeHtml(args)}" en Metrics. Lo creo sin enlazar?`,
+        keyboard,
+      );
       return;
+    }
+
+    case "negocios": {
+      if (!(await requireBakano(operator))) return;
+      const negocios = await listarNegocios();
+      if (!negocios.length) {
+        await sendMessage(chatId, "Todavía no hay negocios. Da de alta uno con /alta <nombre>.");
+        return;
+      }
+      await sendMessage(
+        chatId,
+        `<b>${negocios.length} negocios en Lucas</b>\nToca uno para entrar como equipo Bakano (configurar, probar capturas):`,
+        negocios
+          .slice(0, 40)
+          .map((n) => [{ text: n.nombre.slice(0, 50), callback_data: `entrar:${n._id}` }]),
+      );
+      return;
+    }
+
+    case "codigo": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      if (operator.role === "vendedor") {
+        await sendMessage(chatId, "El código lo comparte el dueño del negocio.");
+        return;
+      }
+      const negocio = await getNegocio(negocioId);
+      await sendMessage(
+        chatId,
+        `Código de <b>${escapeHtml(negocio?.nombre ?? "")}</b> para que se vinculen el dueño y sus vendedores:\n\n<code>/vincular ${escapeHtml(negocio?.codigo ?? "")}</code>\n\nEl primero que se vincula queda como dueño.`,
+      );
+      return;
+    }
 
     case "cobros":
+      if (!(await requireBakano(operator))) return;
       await listarDeudores(operator);
       return;
 
-    case "soltar":
-      await updateOperator(operator._id, { activeClientId: null, pendingAction: "" });
-      await sendMessage(chatId, "Listo, sin cliente activo.");
+    case "crm":
+      if (!(await requireBakano(operator))) return;
+      await resumenCrm(operator);
       return;
 
     default:
@@ -408,12 +686,48 @@ async function selectClient(
     await resolvePendingCapture(operator, clientId);
     return;
   }
-  await updateOperator(operator._id, { activeClientId: clientId });
-  const card = await clientCard(await getClientById(clientId));
+  const client = await getClientById(clientId, operator.negocio);
+  await updateOperator(operator._id, { activeClientId: client._id });
+  const card = await clientCard(client);
   await sendMessage(
     operator.telegramChatId,
     `${prefix ? `${prefix}\n\n` : ""}${card.html}`,
     card.keyboard,
+  );
+}
+
+async function darDeAlta(operator: OperatorDoc, workspaceId: string): Promise<void> {
+  let nombre = "";
+  try {
+    const pendiente = JSON.parse(operator.pendingAction || "{}");
+    if (pendiente.kind === "alta") nombre = pendiente.nombre;
+  } catch {
+    // pendingAction de otra cosa: se pide de nuevo.
+  }
+  if (!nombre) {
+    await sendMessage(
+      operator.telegramChatId,
+      "Esa alta ya no está pendiente. Vuelve a escribir /alta <nombre>.",
+    );
+    return;
+  }
+  await updateOperator(operator._id, { pendingAction: "" });
+  const negocio = await crearNegocio({
+    nombre,
+    workspaceId: workspaceId === "-" ? "" : workspaceId,
+    creadoPor: operator.name,
+  });
+  await sendMessage(
+    operator.telegramChatId,
+    [
+      `✅ <b>${escapeHtml(negocio.nombre)}</b> dado de alta${negocio.workspaceId ? " y enlazado a su entorno de Metrics" : ""}.`,
+      "",
+      "Mándale esto al dueño para que empiece:",
+      `<code>Escríbele a @LucasByBakanoBot en Telegram y manda: /vincular ${negocio.codigo}</code>`,
+      "",
+      "El primero que se vincula queda como dueño; después puede pasarle el código a sus vendedores.",
+    ].join("\n"),
+    [[{ text: "Entrar a este negocio", callback_data: `entrar:${negocio._id}` }]],
   );
 }
 
@@ -432,9 +746,9 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
     switch (action) {
       case "sug": {
         await answerCallback(query.id, "Pensando…");
-        const clientId = new Types.ObjectId(value);
-        await updateOperator(operator._id, { activeClientId: clientId });
-        await recommendForClient({ operator, clientId });
+        const client = await getClientById(value, operator.negocio);
+        await updateOperator(operator._id, { activeClientId: client._id });
+        await recommendForClient({ operator, clientId: client._id });
         return;
       }
       case "sel":
@@ -458,13 +772,16 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
       case "new": {
         await answerCallback(query.id);
         if (source) await removeKeyboard(source.chat.id, source.message_id);
-        const client = await createClient({ name: value, source: "telegram" });
+        const negocioId = await requireNegocio(operator);
+        if (!negocioId) return;
+        const client = await createClient({ negocio: negocioId, name: value, source: "telegram" });
         await selectClient(operator, client._id, "🆕 Cliente creado.");
         return;
       }
       case "stage": {
         await answerCallback(query.id);
         if (!operator.activeClientId || !isValidStage(value)) return;
+        await getClientById(operator.activeClientId, operator.negocio);
         const client = await updateClient(operator.activeClientId, { stage: value });
         if (source) await removeKeyboard(source.chat.id, source.message_id);
         await sendMessage(
@@ -473,12 +790,65 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
         );
         return;
       }
+      case "qregla": {
+        if (operator.role === "vendedor" || !operator.negocio) {
+          await answerCallback(query.id, "Eso lo configura el dueño del negocio");
+          return;
+        }
+        const reglas = await quitarRegla(operator.negocio, Number(value));
+        await answerCallback(query.id, "Regla quitada");
+        if (source) await removeKeyboard(source.chat.id, source.message_id);
+        await sendMessage(
+          operator.telegramChatId,
+          reglas.length
+            ? `<b>Reglas que siempre respeto</b>\n\n${reglas.map((r, i) => `${i + 1}. ${escapeHtml(r)}`).join("\n")}`
+            : "Ya no tienes reglas.",
+        );
+        return;
+      }
+      case "alta": {
+        await answerCallback(query.id);
+        if (operator.role !== "bakano") return;
+        if (source) await removeKeyboard(source.chat.id, source.message_id);
+        await darDeAlta(operator, value);
+        return;
+      }
+      case "entrar": {
+        if (operator.role !== "bakano") {
+          await answerCallback(query.id);
+          return;
+        }
+        const negocio = await getNegocio(value);
+        if (!negocio) {
+          await answerCallback(query.id, "No encontré ese negocio");
+          return;
+        }
+        await updateOperator(operator._id, {
+          negocio: negocio._id,
+          activeClientId: null,
+          pendingAction: "",
+        });
+        await answerCallback(query.id, `Entraste a ${negocio.nombre}`);
+        await sendMessage(
+          operator.telegramChatId,
+          `Ahora trabajas dentro de <b>${escapeHtml(negocio.nombre)}</b>. Lo que configures (/negocio, /pago, /regla) y las capturas que mandes son de este negocio.`,
+        );
+        return;
+      }
       case "pagar": {
+        if (operator.role !== "bakano") {
+          await answerCallback(query.id);
+          return;
+        }
         await answerCallback(query.id, "Revisando el saldo…");
         await pedirLinkDePago(operator, value);
         return;
       }
       case "pagarf": {
+        if (operator.role !== "bakano") {
+          await answerCallback(query.id);
+          return;
+        }
         await answerCallback(query.id, "Generando link…");
         const [workspaceId, invoiceId] = value.split(":");
         await enviarLinkDePago(operator, workspaceId, invoiceId);
@@ -486,10 +856,15 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
       }
       case "usar": {
         const [suggestionId, index] = value.split(":");
-        const ok = await markChosen(suggestionId, Number(index));
+        const esPago = index === "pago";
+        const ok = await markChosen(suggestionId, esPago ? -1 : Number(index));
         await answerCallback(
           query.id,
-          ok ? `Anotado: usaste la opción ${Number(index) + 1}` : "No encontré esa sugerencia",
+          !ok
+            ? "No encontré esa sugerencia"
+            : esPago
+              ? "Anotado: mandaste el pago"
+              : `Anotado: usaste la opción ${Number(index) + 1}`,
         );
         return;
       }
