@@ -1,9 +1,12 @@
 import mongoose, { Schema, Types } from "mongoose";
 
+export const OPERATOR_ROLES = ["dueno", "vendedor", "bakano"] as const;
+export type OperatorRole = (typeof OPERATOR_ROLES)[number];
+
 /**
- * Miembro del equipo que usa a Lucas desde Telegram. Solo los operadores
- * vinculados (con /vincular <código>) pueden pedirle recomendaciones: el bot
- * lee datos del CRM y no puede quedar abierto a cualquiera que lo encuentre.
+ * Quien usa a Lucas desde Telegram: el dueño de un negocio cliente de Bakano,
+ * sus vendedores, o alguien del equipo de Bakano. Solo los vinculados (con
+ * /vincular <código>) pueden usarlo, y cada uno trabaja dentro de su negocio.
  */
 export interface IOperator {
   telegramUserId: number;
@@ -11,6 +14,9 @@ export interface IOperator {
   name: string;
   username: string;
   isActive: boolean;
+  // Negocio en el que trabaja. El equipo de Bakano puede cambiarlo con /negocios.
+  negocio: Types.ObjectId | null;
+  role: OperatorRole;
   // Cliente con el que se está trabajando: capturas y reenvíos sin cliente claro caen aquí.
   activeClientId: Types.ObjectId | null;
   // Conversaciones anteriores del cliente que se leen al recomendar (0 = solo la actual).
@@ -30,6 +36,8 @@ const operatorSchema = new Schema<IOperator>(
     name: { type: String, default: "" },
     username: { type: String, default: "" },
     isActive: { type: Boolean, default: true },
+    negocio: { type: Schema.Types.ObjectId, ref: "Negocio", default: null, index: true },
+    role: { type: String, enum: OPERATOR_ROLES, default: "vendedor" },
     activeClientId: { type: Schema.Types.ObjectId, ref: "Client", default: null },
     contextConversations: { type: Number, default: 3, min: 0, max: 20 },
     businessConnectionId: { type: String, default: "", index: true },
