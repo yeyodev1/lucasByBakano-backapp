@@ -6,6 +6,7 @@ import clientRoutes from "./client.routes";
 import conversationRoutes from "./conversation.routes";
 import settingRoutes from "./setting.routes";
 import cronRoutes from "./cron.routes";
+import metricsRoutes from "./metrics.routes";
 
 function routerApi(app: Application) {
   const router = express.Router();
@@ -18,6 +19,7 @@ function routerApi(app: Application) {
   router.use("/conversations", conversationRoutes);
   router.use("/settings", settingRoutes);
   router.use("/cron", cronRoutes);
+  router.use("/metrics", metricsRoutes);
 }
 
 export default routerApi;
