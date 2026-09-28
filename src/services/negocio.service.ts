@@ -130,3 +130,14 @@ export async function contextoDeNegocio(id: Types.ObjectId | null): Promise<Cont
   const perfil = negocio.workspaceId ? await perfilDeEntorno(negocio.workspaceId) : null;
   return { negocio: unirConMetrics(negocio, perfil), perfil };
 }
+
+/** El negocio de un entorno de Metrics; si todavía no existe en Lucas, se crea. */
+export async function negocioDeEntorno(
+  workspaceId: string,
+  nombre: string,
+  creadoPor: string,
+): Promise<NegocioDoc> {
+  const existente = await negocioPorEntorno(workspaceId);
+  if (existente) return existente;
+  return crearNegocio({ nombre, workspaceId, creadoPor });
+}
