@@ -14,6 +14,7 @@ export const ALLOWED_UPDATES = [
 ];
 
 export const BOT_COMMANDS = [
+  { command: "ventas", description: "Cómo va tu mes de ventas" },
   { command: "calientes", description: "Los clientes más cerca de comprar" },
   { command: "cliente", description: "Buscar y elegir cliente: /cliente María" },
   { command: "sugerir", description: "Qué responder: /sugerir [n] [pedido]" },
