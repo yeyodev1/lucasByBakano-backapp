@@ -4,7 +4,7 @@ import { deleteWebhook, setWebhook } from "../services/telegram.service";
 /**
  * Registra el webhook de Lucas en Telegram y su menú de comandos.
  *
- *   pnpm telegram:webhook https://lucas-backapp.vercel.app
+ *   pnpm telegram:webhook https://lucas-by-bakano-backapp.vercel.app
  *   pnpm telegram:webhook --delete
  */
 async function main() {

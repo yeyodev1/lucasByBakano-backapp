@@ -102,7 +102,7 @@ pnpm dev               # API en http://localhost:$PORT
 pnpm bot               # Lucas escuchando Telegram en modo polling (quita el webhook mientras corre)
 ```
 
-`pnpm bot` y el webhook de producción no pueden correr a la vez con el mismo bot: al terminar de probar en local, vuelve a registrar el webhook con `pnpm telegram:webhook https://<dominio-de-produccion>`.
+`pnpm bot` y el webhook de producción no pueden correr a la vez con el mismo bot: al terminar de probar en local, vuelve a registrar el webhook con `pnpm telegram:webhook https://lucas-by-bakano-backapp.vercel.app`.
 
 ### Variables de entorno
 
@@ -123,7 +123,7 @@ Todas están en `.env.example` sin valores. Solo `src/config/env.ts` lee `proces
 
 ```bash
 vercel --prod                                       # o push a main
-pnpm telegram:webhook https://<dominio-de-produccion>   # registra el webhook y el menú del bot
+pnpm telegram:webhook https://lucas-by-bakano-backapp.vercel.app   # registra el webhook y el menú del bot
 ```
 
 El cron `/api/cron/lucas` (cada 30 min, en `vercel.json`) avisa de clientes sin respuesta y de los hallazgos diarios del CRM. Vercel lo llama con `Authorization: Bearer $CRON_SECRET`.
