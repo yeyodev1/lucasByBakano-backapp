@@ -11,10 +11,18 @@ Escribe como un buen vendedor ecuatoriano por WhatsApp: frases cortas, emojis do
 
 ## Cómo se usa
 
-1. El equipo de Bakano da de alta al negocio con `/alta <nombre>`. Si el negocio existe en Metrics, se enlaza y Lucas toma de ahí sus productos, ticket promedio y tono. Lucas devuelve un código.
-2. El dueño escribe a [@LucasByBakanoBot](https://t.me/LucasByBakanoBot) y manda `/vincular <código>`. El primero que se vincula queda como dueño; sus vendedores usan el mismo código.
-3. El dueño configura su negocio una vez: `/negocio` (qué vende y a qué precio), `/pago` (sus datos de pago) y `/regla` (sus condiciones).
-4. Desde ahí, cada captura de WhatsApp o conversación pegada devuelve la lectura de la venta y las respuestas.
+**Quién puede usarlo:** los clientes de Bakano con su entorno **activo** en [metrics.bakano.ec](https://metrics.bakano.ec). Si el entorno está inactivo (falta de pago, fin de contrato…), Lucas le dice que no tiene acceso. El equipo de Bakano siempre entra.
+
+**Cómo entra un cliente (sin códigos):**
+
+1. Escribe a [@LucasByBakanoBot](https://t.me/LucasByBakanoBot).
+2. Si ya usa el bot de Bakano (@BakanoAgencyBot), Lucas lo reconoce por su Telegram y lo vincula solo.
+3. Si no, Lucas le pide el correo con el que entra a metrics.bakano.ec, le manda un código de 6 dígitos a ese correo y listo.
+4. Si su negocio todavía no existe en Lucas, se crea enlazado a su entorno de Metrics (Lucas toma de ahí productos, ticket promedio y tono). El admin del entorno queda como dueño y los colaboradores como vendedores. Si tiene varios negocios, elige con cuál trabajar.
+
+El dueño configura su negocio una vez: `/negocio` (qué vende y a qué precio), `/pago` (sus datos de pago) y `/regla` (sus condiciones). Desde ahí, cada captura de WhatsApp o conversación pegada devuelve la lectura de la venta y las respuestas.
+
+El equipo de Bakano entra con `/vincular <TELEGRAM_LINK_CODE>` (o con su correo de Metrics si es usuario interno) y puede dar de alta negocios con `/alta`, que solo acepta entornos activos.
 
 ### Comandos
 
