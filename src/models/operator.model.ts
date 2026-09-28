@@ -39,7 +39,7 @@ const operatorSchema = new Schema<IOperator>(
     negocio: { type: Schema.Types.ObjectId, ref: "Negocio", default: null, index: true },
     role: { type: String, enum: OPERATOR_ROLES, default: "vendedor" },
     activeClientId: { type: Schema.Types.ObjectId, ref: "Client", default: null },
-    contextConversations: { type: Number, default: 3, min: 0, max: 20 },
+    contextConversations: { type: Number, default: 10, min: 0, max: 20 },
     businessConnectionId: { type: String, default: "", index: true },
     pendingAction: { type: String, default: "" },
   },

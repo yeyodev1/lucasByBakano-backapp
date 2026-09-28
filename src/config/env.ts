@@ -71,7 +71,7 @@ export const env = {
   // Frontend de Metrics, para mandar al equipo al link de Integraciones de cada cliente.
   METRICS_APP_URL: optional("METRICS_APP_URL", "https://metrics.bakano.ec"),
   // Conversaciones anteriores del cliente que Lucas lee por defecto al recomendar.
-  LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "3")),
+  LUCAS_DEFAULT_CONTEXT: Number(optional("LUCAS_DEFAULT_CONTEXT", "10")),
   // Horas sin mensajes tras las que se abre una conversación nueva con el cliente.
   LUCAS_CONVERSATION_GAP_HOURS: Number(optional("LUCAS_CONVERSATION_GAP_HOURS", "12")),
 } as const;
