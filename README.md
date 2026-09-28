@@ -1,83 +1,125 @@
-# Lucas API
+# Lucas · agente de ventas de Bakano
 
-Express 5 + Mongoose + TypeScript. Se despliega en Vercel como función serverless.
+Lucas es el agente de ventas que [Bakano](https://bakano.ec) le da a sus clientes: negocios en Ecuador que venden por WhatsApp. El dueño o sus vendedores le pasan la conversación con un cliente por Telegram ([@LucasByBakanoBot](https://t.me/LucasByBakanoBot)) y Lucas les dice:
 
-## Setup local
+- **qué responder** para cerrar la venta, con 2 o 3 opciones listas para copiar;
+- **qué tan cerca están de cerrar**: frío, tibio, caliente o listo para pagar, con porcentaje y lo que falta;
+- **cuándo mandar el pago**, con el mensaje ya armado con sus datos de pago;
+- y siempre respeta **las reglas del negocio**, por ejemplo "no se envían proformas para montos menores a $500".
+
+Escribe como un buen vendedor ecuatoriano por WhatsApp: frases cortas, emojis donde suman, signos de pregunta solo al final y nada de frases de oficina.
+
+## Cómo se usa
+
+1. El equipo de Bakano da de alta al negocio con `/alta <nombre>`. Si el negocio existe en Metrics, se enlaza y Lucas toma de ahí sus productos, ticket promedio y tono. Lucas devuelve un código.
+2. El dueño escribe a [@LucasByBakanoBot](https://t.me/LucasByBakanoBot) y manda `/vincular <código>`. El primero que se vincula queda como dueño; sus vendedores usan el mismo código.
+3. El dueño configura su negocio una vez: `/negocio` (qué vende y a qué precio), `/pago` (sus datos de pago) y `/regla` (sus condiciones).
+4. Desde ahí, cada captura de WhatsApp o conversación pegada devuelve la lectura de la venta y las respuestas.
+
+### Comandos
+
+| Comando | Qué hace |
+|---|---|
+| `/calientes` | Los clientes más cerca de comprar |
+| `/ventas` | Cómo va el mes: facturación registrada en Metrics, ROAS y lo que falta cerrar |
+| `/cliente <nombre o teléfono>` · `/nuevo <nombre \| teléfono>` | Buscar o crear un cliente |
+| `/ficha` · `/nota` · `/etapa` | Ficha del cliente activo |
+| `/sugerir [n] [pedido]` | Qué responder; `n` = conversaciones anteriores a leer |
+| `/contexto <n>` | Cuántas conversaciones anteriores lee por defecto |
+| `/negocio` · `/pago` · `/regla` · `/reglas` | Configuración del negocio |
+| `/alertas` · `/alertasaqui` | A dónde llegan los avisos (en un grupo del equipo: `/alertasaqui`) |
+| `/alta` · `/negocios` · `/codigo` · `/cobros` · `/crm` | Solo equipo Bakano |
+
+### Avisos
+
+Lucas le avisa al dueño del negocio (o a su grupo):
+
+- un cliente escribió por Telegram Business y nadie le respondió en `LUCAS_SLA_MINUTOS`;
+- un vendedor atendió mal (respuesta seca, información falsa, prometió de más);
+- un cliente está molesto o en riesgo;
+- **cierres casi solos**: la revisión diaria del CRM del negocio (en Metrics → Integraciones) encontró leads que dieron todo para comprar y no se cerraron.
+
+El mismo aviso no se repite. El equipo de Bakano recibe su propio resumen para dar seguimiento.
+
+## Cómo está hecho
+
+```
+Telegram ──webhook──▶ /api/telegram/webhook ──▶ lucas.service (comandos, capturas)
+                                                   │
+                     ┌─────────────────────────────┼──────────────────────────────┐
+                     ▼                             ▼                              ▼
+             CRM de Lucas (Mongo)        IA (AI SDK + Vercel AI Gateway)    Metrics (solo lectura)
+       negocios, leads, conversaciones,   lee capturas y recomienda        perfil del negocio, facturación,
+       sugerencias, avisos                                                 CRM y cierres casi solos
+```
+
+- **Stack:** Express 5 + Mongoose + TypeScript, desplegado en Vercel como función serverless (`api/index.ts`).
+- **IA:** [AI SDK](https://ai-sdk.dev) sobre [Vercel AI Gateway](https://vercel.com/docs/ai-gateway). El modelo se cambia con `AI_MODEL` (`proveedor/modelo`), sin tocar código. En Vercel se autentica con OIDC; en local con `AI_GATEWAY_API_KEY`.
+- **Multi-negocio:** todo cuelga de `Negocio`. Leads, capturas, reglas y avisos de un negocio nunca se mezclan con los de otro.
+- **Metrics:** Lucas lee la base de [metrics.bakano.ec](https://metrics.bakano.ec) en modo solo lectura (`METRICS_DB_URI`).
+- **Idempotencia:** Telegram reintenta el webhook si la IA tarda; cada `update_id` se procesa una sola vez.
+
+### Estructura
+
+```
+src/
+  models/        negocio, operator, client (lead), conversation, message, suggestion, alert…
+  services/
+    lucas.service.ts           comandos y flujo del bot
+    capture.service.ts         capturas, texto pegado, reenvíos y Telegram Business
+    recommendation.service.ts  arma la recomendación y la manda
+    ai.service.ts              prompts y llamadas a la IA
+    negocio.service.ts         negocios, reglas y datos de pago
+    metrics.service.ts         lectura de Metrics
+    alert.service.ts · monitor.service.ts   avisos y vigilancia
+  routes/ controllers/         webhook, cron y API de administración
+  scripts/                     polling local y registro del webhook
+```
+
+## Ambientes
+
+| Rama | Ambiente | Bot | Base |
+|---|---|---|---|
+| `main` | Producción (Vercel production) | @LucasByBakanoBot por webhook | `lucas` |
+| `develop` | Pruebas (Vercel preview) | sin webhook: se prueba en local con `pnpm bot` o con un bot de pruebas | `lucas-dev` |
+
+Se trabaja en `develop` y se pasa a producción con un merge a `main`. Vercel despliega cada push.
+
+## Correr en local
 
 ```bash
 pnpm install
-cp .env.example .env         # rellenar DB_URI, JWT_SECRET, ADMIN_PASSWORD
-pnpm dev                     # http://localhost:8100
+cp .env.example .env   # completar variables
+pnpm dev               # API en http://localhost:$PORT
+pnpm bot               # Lucas escuchando Telegram en modo polling (quita el webhook mientras corre)
 ```
 
-Smoke:
+`pnpm bot` y el webhook de producción no pueden correr a la vez con el mismo bot: al terminar de probar en local, vuelve a registrar el webhook con `pnpm telegram:webhook https://<dominio-de-produccion>`.
 
-```bash
-curl http://localhost:8100/
-curl http://localhost:8100/api/health
-curl -X POST http://localhost:8100/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@cliente.com","password":"..."}'
-```
+### Variables de entorno
 
-## Scripts
+Todas están en `.env.example` sin valores. Solo `src/config/env.ts` lee `process.env`.
 
-| Script | Qué hace |
+| Grupo | Variables |
 |---|---|
-| `pnpm dev` | ts-node-dev con recarga |
-| `pnpm build` | `tsc` → `dist/` |
-| `pnpm start` | `node dist/index.js` |
-| `pnpm seed:admin` | crea/actualiza la cuenta admin desde `.env` |
-| `pnpm format` | prettier |
+| Base | `DB_URI`, `PORT`, `JWT_SECRET`, `CORS_ORIGINS`, `FRONTEND_URL`, `SLACK_ERROR_WEBHOOK` |
+| Admin del API | `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` |
+| Telegram | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `TELEGRAM_LINK_CODE` (código del equipo Bakano) |
+| IA | `AI_GATEWAY_API_KEY` (solo local), `AI_MODEL`, `AI_LIMITE_MS` |
+| Metrics | `METRICS_DB_URI`, `METRICS_DB_NAME`, `METRICS_APP_URL` |
+| Finanzas (cobros de Bakano) | `FINANCES_API_URL`, `FINANCES_PORTAL_KEY`, `PAGO_RETURN_URL` |
+| Lucas | `LUCAS_DEFAULT_CONTEXT`, `LUCAS_CONVERSATION_GAP_HOURS`, `LUCAS_SLA_MINUTOS`, `CRON_SECRET` |
+| Correo | `RESEND_API_KEY`, `RESEND_FROM_EMAIL` |
 
-## Endpoints
-
-Todo cuelga de `/api` (`src/routes/index.ts`).
-
-- `GET /` → alive
-- `GET /api/health` → `{ ok, db, uptime }`
-- `POST /api/auth/login` → `{ token, user }`
-- `GET /api/auth/me` → `{ user }` (Bearer)
-- `PUT /api/auth/password` → `{ user }` (Bearer) body `{ current, next }`
-
-## Deploy a Vercel
-
-- `api/index.ts` — entrada serverless: conecta Mongo, siembra admin y delega en la app Express.
-- `vercel.json` — todo el tráfico se reescribe a `/api`.
-
-Variables de entorno (Vercel → Project → Settings → Environment Variables): las mismas de `.env.example`.
+## Despliegue
 
 ```bash
-vercel --prod
+vercel --prod                                       # o push a main
+pnpm telegram:webhook https://<dominio-de-produccion>   # registra el webhook y el menú del bot
 ```
 
-## Lucas: bot de Telegram (@LucasByBakanoBot)
+El cron `/api/cron/lucas` (cada 30 min, en `vercel.json`) avisa de clientes sin respuesta y de los hallazgos diarios del CRM. Vercel lo llama con `Authorization: Bearer $CRON_SECRET`.
 
-Copiloto de ventas: lee conversaciones con clientes, las guarda en el CRM (Mongo) y recomienda qué responder. La IA corre con el AI SDK sobre Vercel AI Gateway (`AI_MODEL` = "proveedor/modelo", `AI_GATEWAY_API_KEY` en local, OIDC en Vercel), igual que el bot de métricas.
+### API de administración
 
-**Cómo le llegan las conversaciones**
-
-- Capturas de pantalla (WhatsApp, Instagram, etc.): Claude las transcribe, identifica al cliente y lo crea si no existe.
-- Texto pegado.
-- Mensajes reenviados de Telegram.
-- Telegram Business: el operador conecta el bot en Ajustes → Telegram Business → Chatbots y Lucas lee sus chats privados. Nunca le responde al cliente; solo avisa al operador.
-
-**Contexto:** cada operador elige cuántas conversaciones anteriores lee Lucas (`/contexto n`, o `/sugerir n` para una sola vez). Una conversación nueva empieza tras `LUCAS_CONVERSATION_GAP_HOURS` horas de silencio.
-
-**Acceso:** solo operadores vinculados con `/vincular <TELEGRAM_LINK_CODE>`.
-
-```bash
-pnpm bot                                   # local, modo polling (sin URL pública)
-pnpm telegram:webhook https://<backend>    # producción: registra el webhook y el menú
-pnpm telegram:webhook --delete
-```
-
-API de administración (Bearer de admin): `/api/clients`, `/api/conversations/:id`, `/api/settings/business`.
-
-### Coordinación con el bot de Bakano y avisos al equipo
-
-- **Roles:** @BakanoAgencyBot (metrics) es el único que les escribe a los clientes. Lucas solo habla con el equipo.
-- **Lucas lee de Metrics (solo lectura):** entorno activo/inactivo y motivo, ánimo detectado, si el bot ya le recordó el pago o ya alertó al equipo, y los últimos mensajes del cliente con el bot. Con eso no repite ni contradice lo que el cliente ya recibió.
-- **Cobros:** saldos y links de Stripe desde finanzas (`/cobros`, botón 💳 en la ficha).
-- **Avisos al equipo** (`/alertas`; en un grupo del equipo, `/alertasaqui`): cliente sin respuesta más de `LUCAS_SLA_MINUTOS` en Telegram Business (cron `/api/cron/lucas` cada 30 min, 8:00 a 20:00 Ecuador), mala atención detectada al revisar respuestas del asesor, cliente molesto o en riesgo, oportunidades y reclamos de cobro. El mismo aviso no se repite.
-
+Detrás de login de admin (`POST /api/auth/login`): `/api/clients?negocio=<id>`, `/api/conversations/:id`. `pnpm build` es la única verificación (no hay tests ni linter).
