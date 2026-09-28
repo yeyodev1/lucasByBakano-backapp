@@ -591,3 +591,75 @@ export async function facturacionDeEntorno(
     return null;
   }
 }
+
+export interface UsuarioMetrics {
+  userId: string;
+  nombre: string;
+  email: string;
+  esEquipo: boolean;
+  entornos: { id: string; nombre: string; rol: "admin" | "colaborador" }[];
+}
+
+async function aUsuario(db: any, u: any): Promise<UsuarioMetrics> {
+  const accesos = new Map<string, "admin" | "colaborador">();
+  for (const a of u.workspaces ?? []) {
+    if (a?.workspaceId)
+      accesos.set(String(a.workspaceId), a.role === "colaborador" ? "colaborador" : "admin");
+  }
+  if (u.workspaceId && !accesos.has(String(u.workspaceId))) {
+    accesos.set(String(u.workspaceId), u.role === "colaborador" ? "colaborador" : "admin");
+  }
+  const ids = [...accesos.keys()]
+    .filter((id) => Types.ObjectId.isValid(id))
+    .map((id) => new Types.ObjectId(id));
+  const entornos = ids.length
+    ? await db
+        .collection("workspaces")
+        .find({ _id: { $in: ids }, isActive: true }, { projection: { name: 1 } })
+        .toArray()
+    : [];
+  return {
+    userId: String(u._id),
+    nombre: [u.name, u.lastName].filter(Boolean).join(" ") || String(u.email ?? ""),
+    email: String(u.email ?? ""),
+    esEquipo: Boolean(u.isInternal || u.role === "superadmin"),
+    entornos: entornos.map((w: any) => ({
+      id: String(w._id),
+      nombre: w.name ?? "",
+      rol: accesos.get(String(w._id)) ?? "colaborador",
+    })),
+  };
+}
+
+/**
+ * Si la persona ya se conectó a @BakanoAgencyBot (verificó su correo de
+ * Metrics ahí), Lucas la reconoce por su Telegram sin pedirle nada.
+ */
+export async function usuarioPorTelegram(telegramUserId: number): Promise<UsuarioMetrics | null> {
+  if (!env.METRICS_DB_URI) return null;
+  try {
+    const db = (await conectar()).db!;
+    const chat: any = await db
+      .collection("telegramchats")
+      .findOne(
+        { telegramUserId, estado: "listo", userId: { $exists: true } },
+        { projection: { userId: 1 } },
+      );
+    if (!chat?.userId) return null;
+    const u = await db.collection("users").findOne({ _id: chat.userId, isActive: { $ne: false } });
+    return u ? aUsuario(db, u) : null;
+  } catch (error: any) {
+    console.error("[metrics] usuario por telegram:", error?.message ?? error);
+    return null;
+  }
+}
+
+/** Usuario de metrics.bakano.ec por su correo. */
+export async function usuarioPorCorreo(email: string): Promise<UsuarioMetrics | null> {
+  if (!env.METRICS_DB_URI || !email.includes("@")) return null;
+  const db = (await conectar()).db!;
+  const u = await db
+    .collection("users")
+    .findOne({ email: email.trim().toLowerCase(), isActive: { $ne: false } });
+  return u ? aUsuario(db, u) : null;
+}
