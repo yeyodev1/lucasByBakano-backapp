@@ -521,3 +521,73 @@ export async function buscarEntornos(
     activo: Boolean(w.isActive),
   }));
 }
+
+export interface FacturacionMes {
+  total: number;
+  dias: number;
+  metaSpend: number;
+}
+
+export interface FacturacionNegocio {
+  mesActual: FacturacionMes;
+  mesAnterior: FacturacionMes;
+  // Días del mes actual (hasta ayer) sin venta registrada en Metrics.
+  diasSinRegistrar: number;
+  ultimos7: number;
+}
+
+function inicioDeMesEcuador(desplazamiento = 0): Date {
+  const ahora = new Date(Date.now() - 5 * 3_600_000);
+  return new Date(Date.UTC(ahora.getUTCFullYear(), ahora.getUTCMonth() + desplazamiento, 1, 5));
+}
+
+/**
+ * Lo que el negocio registró como ventas en Metrics (su facturación diaria,
+ * la misma que usa para el ROAS). Sirve para que el dueño vea cómo va el mes.
+ */
+export async function facturacionDeEntorno(
+  workspaceId: string,
+): Promise<FacturacionNegocio | null> {
+  if (!env.METRICS_DB_URI || !Types.ObjectId.isValid(workspaceId)) return null;
+  try {
+    const db = (await conectar()).db!;
+    const desde = inicioDeMesEcuador(-1);
+    const entradas = await db
+      .collection("dailybillingentries")
+      .find(
+        { workspaceId: new Types.ObjectId(workspaceId), date: { $gte: desde } },
+        { projection: { date: 1, amount: 1, metaSpend: 1 } },
+      )
+      .toArray();
+
+    const inicioActual = inicioDeMesEcuador(0).getTime();
+    const hace7 = Date.now() - 7 * 24 * 3_600_000;
+    const actual: FacturacionMes = { total: 0, dias: 0, metaSpend: 0 };
+    const anterior: FacturacionMes = { total: 0, dias: 0, metaSpend: 0 };
+    const diasConVenta = new Set<string>();
+    let ultimos7 = 0;
+
+    for (const e of entradas as any[]) {
+      const fecha = new Date(e.date).getTime();
+      const mes = fecha >= inicioActual ? actual : anterior;
+      mes.total += Number(e.amount) || 0;
+      mes.metaSpend += Number(e.metaSpend) || 0;
+      mes.dias += 1;
+      if (fecha >= inicioActual)
+        diasConVenta.add(new Date(fecha - 5 * 3_600_000).toISOString().slice(0, 10));
+      if (fecha >= hace7) ultimos7 += Number(e.amount) || 0;
+    }
+
+    const hoyEc = new Date(Date.now() - 5 * 3_600_000);
+    const diasTranscurridos = Math.max(0, hoyEc.getUTCDate() - 1);
+    return {
+      mesActual: actual,
+      mesAnterior: anterior,
+      diasSinRegistrar: Math.max(0, diasTranscurridos - diasConVenta.size),
+      ultimos7,
+    };
+  } catch (error: any) {
+    console.error("[metrics] facturación:", error?.message ?? error);
+    return null;
+  }
+}
