@@ -24,7 +24,8 @@ import {
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { resumenCrm } from "./crm.service";
 import { resumenVentas } from "./ventas.service";
-import { PerfilNegocio, buscarEntornos } from "./metrics.service";
+import { atenderSinVincular, elegirEntorno, SIN_ACCESO } from "./vinculacion.service";
+import { PerfilNegocio, buscarEntornos, entornoPorId } from "./metrics.service";
 import {
   actualizarNegocio,
   agregarRegla,
@@ -93,6 +94,33 @@ const HELP_BAKANO = `\n\n<b>Equipo Bakano</b>
 
 function ayuda(operator: OperatorDoc): string {
   return operator.role === "bakano" ? HELP + HELP_BAKANO : HELP;
+}
+
+// Cuánto se confía en el último chequeo del entorno antes de volver a Metrics.
+const ACCESO_CACHE_MS = 10 * 60_000;
+const accesoCache = new Map<string, { ok: boolean; hasta: number }>();
+
+/**
+ * Los clientes solo usan a Lucas mientras su entorno de Metrics esté activo:
+ * si se desactiva (falta de pago, fin de contrato…), pierden el acceso. El
+ * equipo de Bakano siempre entra.
+ */
+async function tieneAcceso(operator: OperatorDoc): Promise<boolean> {
+  if (operator.role === "bakano") return true;
+  if (!operator.negocio) return false;
+  const clave = String(operator.negocio);
+  const guardado = accesoCache.get(clave);
+  if (guardado && guardado.hasta > Date.now()) return guardado.ok;
+
+  const negocio = await getNegocio(operator.negocio);
+  let ok = false;
+  if (negocio?.isActive && negocio.workspaceId) {
+    const entorno = await entornoPorId(negocio.workspaceId).catch(() => undefined);
+    // Si Metrics no responde, no se le corta el servicio al cliente por un error nuestro.
+    ok = entorno === undefined ? true : Boolean(entorno?.activo);
+  }
+  accesoCache.set(clave, { ok, hasta: Date.now() + ACCESO_CACHE_MS });
+  return ok;
 }
 
 /** Punto de entrada de cada update de Telegram (webhook o polling). */
@@ -251,15 +279,17 @@ async function handlePrivateMessage(message: TgMessage): Promise<void> {
 
   let operator = await findOperator(from.id);
   if (!operator) {
-    await sendMessage(
-      chatId,
-      "Hola, soy Lucas 🧠, el agente de ventas de Bakano. Te ayudo a cerrar tus ventas por WhatsApp.\n\nPara empezar manda el código que te dio tu asesor de Bakano:\n<code>/vincular código</code>",
-    );
+    // Clientes de Bakano: entran con su cuenta de metrics.bakano.ec, sin código.
+    await atenderSinVincular(message);
     return;
   }
 
   // El chat puede cambiar si reinstaló Telegram.
   if (operator.telegramChatId !== chatId) operator = await linkOperator(from, chatId);
+  if (!(await tieneAcceso(operator))) {
+    await sendMessage(chatId, SIN_ACCESO);
+    return;
+  }
 
   if (parsed) {
     await handleCommand(operator, parsed.command, parsed.args);
@@ -648,19 +678,23 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await updateOperator(operator._id, {
         pendingAction: JSON.stringify({ kind: "alta", nombre: args }),
       });
-      const keyboard: TgInlineKeyboard = entornos.map((e) => [
-        {
-          text: `🔗 ${e.nombre.slice(0, 40)}${e.activo ? "" : " (inactivo)"}`,
-          callback_data: `alta:${e.id}`,
-        },
-      ]);
-      keyboard.push([{ text: "➕ Crear sin entorno de Metrics", callback_data: "alta:-" }]);
+      // Lucas es solo para entornos activos de Metrics: no se da de alta un negocio sin uno.
+      const activos = entornos.filter((e) => e.activo);
+      if (!activos.length) {
+        await sendMessage(
+          chatId,
+          entornos.length
+            ? `"${escapeHtml(args)}" está en Metrics pero su entorno no está activo, así que no puede usar a Lucas.`
+            : `No encontré "${escapeHtml(args)}" en Metrics. Lucas solo se da de alta para entornos activos.`,
+        );
+        return;
+      }
       await sendMessage(
         chatId,
-        entornos.length
-          ? `Encontré estos entornos en Metrics. Si es uno de ellos, lo enlazo y Lucas toma de ahí sus productos, ticket y tono:`
-          : `No encontré "${escapeHtml(args)}" en Metrics. Lo creo sin enlazar?`,
-        keyboard,
+        "Cuál de estos entornos de Metrics es? Lo enlazo y Lucas toma de ahí sus productos, ticket y tono:",
+        activos.map((e) => [
+          { text: `🔗 ${e.nombre.slice(0, 50)}`, callback_data: `alta:${e.id}` },
+        ]),
       );
       return;
     }
@@ -750,7 +784,7 @@ async function darDeAlta(operator: OperatorDoc, workspaceId: string): Promise<vo
   await updateOperator(operator._id, { pendingAction: "" });
   const negocio = await crearNegocio({
     nombre,
-    workspaceId: workspaceId === "-" ? "" : workspaceId,
+    workspaceId,
     creadoPor: operator.name,
   });
   await sendMessage(
@@ -768,9 +802,26 @@ async function darDeAlta(operator: OperatorDoc, workspaceId: string): Promise<vo
 }
 
 async function handleCallback(query: TgCallbackQuery): Promise<void> {
+  // Elegir negocio al vincularse: la persona todavía puede no ser operador.
+  if (query.data?.startsWith("ent:") && query.message) {
+    await answerCallback(query.id);
+    await removeKeyboard(query.message.chat.id, query.message.message_id);
+    const ok = await elegirEntorno(query.message, query.from, query.data.slice(4));
+    if (!ok)
+      await sendMessage(
+        query.message.chat.id,
+        "Escríbeme de nuevo tu correo de metrics.bakano.ec y lo intentamos otra vez.",
+      );
+    return;
+  }
   const operator = await findOperator(query.from.id);
   if (!operator) {
     await answerCallback(query.id, "Primero vincúlate con /vincular");
+    return;
+  }
+  if (!(await tieneAcceso(operator))) {
+    await answerCallback(query.id);
+    await sendMessage(operator.telegramChatId, SIN_ACCESO);
     return;
   }
   const data = query.data ?? "";
