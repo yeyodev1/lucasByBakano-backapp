@@ -23,6 +23,7 @@ import {
 } from "./client.service";
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { resumenCrm } from "./crm.service";
+import { resumenVentas } from "./ventas.service";
 import { PerfilNegocio, buscarEntornos } from "./metrics.service";
 import {
   actualizarNegocio,
@@ -73,6 +74,7 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversaci�
 
 <b>Tus clientes</b>
 /calientes: los que están más cerca de comprar
+/ventas: cómo va tu mes (tu facturación en Metrics y lo que puedes cerrar)
 /cliente <i>nombre o teléfono</i>: buscar y elegir
 /nuevo <i>nombre | teléfono</i>: crear
 /ficha · /nota <i>texto</i> · /etapa
@@ -448,6 +450,13 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       return;
     }
 
+    case "ventas": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      await resumenVentas(chatId, negocioId);
+      return;
+    }
+
     case "sugerir": {
       const clientId = await requireActiveClient(operator);
       if (!clientId) return;
@@ -531,7 +540,8 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
         const partes = [
           deMetrics &&
             `<b>Esto ya lo sé por tu perfil en Metrics</b> (no hace falta repetirlo):\n${escapeHtml(deMetrics)}`,
-          negocio.info && `<b>Precios y condiciones que me contaste:</b>\n${escapeHtml(negocio.info)}`,
+          negocio.info &&
+            `<b>Precios y condiciones que me contaste:</b>\n${escapeHtml(negocio.info)}`,
         ].filter(Boolean);
         await sendMessage(
           chatId,
