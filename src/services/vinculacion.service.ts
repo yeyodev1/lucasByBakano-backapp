@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { IVinculacion, Vinculacion } from "../models/vinculacion.model";
 import { TgMessage, TgUser } from "../types/telegram";
-import { layout, sendEmail } from "./email.service";
+import { codeBlock, layout, sendEmail } from "./email.service";
 import { UsuarioMetrics, usuarioPorCorreo, usuarioPorTelegram } from "./metrics.service";
 import { getNegocio, negocioDeEntorno } from "./negocio.service";
 import { linkOperator, OperatorDoc } from "./operator.service";
@@ -196,10 +196,13 @@ export async function atenderSinVincular(message: TgMessage): Promise<OperatorDo
     const codigo = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
     const enviado = await sendEmail(
       correo,
-      `Tu código para Lucas: ${codigo}`,
+      `${codigo} es tu código para entrar a Lucas`,
       layout(
-        "Tu código para entrar a Lucas",
-        `<p>Hola ${escapeHtml(usuario.nombre)},</p><p>Escríbele este código a Lucas en Telegram:</p><p style="font-size:30px;font-weight:bold;letter-spacing:6px">${codigo}</p><p style="color:#666">Vence en 15 minutos. Si no fuiste tú, ignora este correo.</p>`,
+        `¡Hola, ${escapeHtml(usuario.nombre)}! 👋`,
+        `<p style="margin:0 0 12px">Soy Lucas, el agente de ventas de Bakano. Ya casi estamos: mándame este código por Telegram y empezamos a trabajar juntos.</p>
+        ${codeBlock(codigo)}
+        <p style="margin:0 0 12px">Desde ahí me pasas tus conversaciones de WhatsApp y te digo qué responder, qué tan cerca está cada cliente de comprar y cuándo mandar el pago. Todo lo que me cuentes lo recuerdo, así que nunca tienes que explicarme dos veces.</p>
+        <p style="margin:0;color:#6b6478;font-size:13px">El código vence en 15 minutos. Si no fuiste tú, ignora este correo y no pasa nada.</p>`,
       ),
     );
     if (!enviado) {

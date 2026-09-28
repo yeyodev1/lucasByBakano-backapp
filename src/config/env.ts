@@ -38,6 +38,8 @@ export const env = {
   ADMIN_NAME: optional("ADMIN_NAME", "Administración"),
   RESEND_API_KEY: optional("RESEND_API_KEY", ""),
   RESEND_FROM_EMAIL: optional("RESEND_FROM_EMAIL", "Lucas <onboarding@resend.dev>"),
+  // Dominio público desde el que los correos cargan la foto de Lucas y el logo (public/email).
+  PUBLIC_URL: optional("PUBLIC_URL", "https://lucas-by-bakano-backapp.vercel.app"),
   CLOUDINARY_CLOUD_NAME: optional("CLOUDINARY_CLOUD_NAME", ""),
   CLOUDINARY_API_KEY: optional("CLOUDINARY_API_KEY", ""),
   CLOUDINARY_API_SECRET: optional("CLOUDINARY_API_SECRET", ""),
