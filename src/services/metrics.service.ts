@@ -603,7 +603,10 @@ export interface UsuarioMetrics {
 async function aUsuario(db: any, u: any): Promise<UsuarioMetrics> {
   const accesos = new Map<string, "admin" | "colaborador">();
   for (const a of u.workspaces ?? []) {
-    if (a?.workspaceId)
+    // En Metrics se decide a qué bot entra cada persona por entorno. Sin el
+    // campo (altas viejas) entra a los dos.
+    const bots: string[] = Array.isArray(a?.bots) && a.bots.length ? a.bots : ["bakano", "lucas"];
+    if (a?.workspaceId && bots.includes("lucas"))
       accesos.set(String(a.workspaceId), a.role === "colaborador" ? "colaborador" : "admin");
   }
   if (u.workspaceId && !accesos.has(String(u.workspaceId))) {
