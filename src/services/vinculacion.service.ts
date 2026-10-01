@@ -54,7 +54,7 @@ function bienvenida(nombreNegocio: string, rol: string, faltaConfigurar: boolean
 /** Vincula a la persona a un entorno de Metrics (crea el negocio si hace falta). */
 async function vincularAEntorno(
   message: TgMessage,
-  usuario: Pick<UsuarioMetrics, "nombre" | "entornos">,
+  usuario: Pick<UsuarioMetrics, "nombre" | "entornos"> & { email?: string },
   entornoId: string,
 ): Promise<OperatorDoc | null> {
   const entorno = usuario.entornos.find((e) => e.id === entornoId);
@@ -64,6 +64,7 @@ async function vincularAEntorno(
   const operator = await linkOperator(message.from!, message.chat.id, {
     negocio: negocio._id,
     role,
+    email: usuario.email,
   });
   const actual = await getNegocio(negocio._id);
   await sendMessage(
@@ -81,6 +82,7 @@ async function vincularUsuario(
     const operator = await linkOperator(message.from!, message.chat.id, {
       negocio: null,
       role: "bakano",
+      email: usuario.email,
     });
     await sendMessage(
       message.chat.id,
@@ -261,6 +263,7 @@ export async function elegirEntorno(
     { ...message, from },
     {
       nombre: from.first_name,
+      email: pendiente.email,
       entornos: pendiente.entornos as UsuarioMetrics["entornos"],
     },
     entornoId,

@@ -5,6 +5,7 @@ import { CLIENT_STAGES } from "../models/client.model";
 import type { ClientDoc } from "./client.service";
 import type { ConversationWithMessages } from "./conversation.service";
 import type { ContextoNegocio } from "./negocio.service";
+import type { AsesorCrm, CrmDelLead, MensajeVentaCrm, VentaCrm } from "./metrics.service";
 
 /**
  * La IA de Lucas corre con el AI SDK sobre Vercel AI Gateway, igual que el bot
@@ -206,7 +207,11 @@ Qué entregas:
 - alerts: riesgos reales (objeción sin resolver, lead enfriándose, algo que pidió y no se le respondió, dato que falta en la información del negocio). Frases cortas.
 - suggestedStage: la etapa del embudo que corresponde, o vacío si no está claro.
 - captured: solo datos nuevos del lead (teléfono, correo, empresa, intereses) que aparezcan en la conversación y no estén en la ficha.
-- teamAlert: si el dueño del negocio necesita enterarse ya. Lo normal es "ninguna". Úsalo para: mala_atencion (quien atiende respondió seco, tarde, con información falsa o ignoró lo que el lead preguntó), cliente_molesto o cliente_en_riesgo (reclamo fuerte, amenaza con irse o con dejar mala reseña), oportunidad (compra grande, pedido recurrente, referido), cobro (dice que ya pagó y no se refleja). "urgente" solo si hay que actuar hoy.`;
+- teamAlert: si el dueño del negocio necesita enterarse ya. Lo normal es "ninguna". Úsalo para: mala_atencion (quien atiende respondió seco, tarde, con información falsa o ignoró lo que el lead preguntó), cliente_molesto o cliente_en_riesgo (reclamo fuerte, amenaza con irse o con dejar mala reseña), oportunidad (compra grande, pedido recurrente, referido), cobro (dice que ya pagó y no se refleja). "urgente" solo si hay que actuar hoy.
+
+CRM del negocio (<crm_del_lead>, si viene):
+- Es lo que dice el CRM del negocio sobre este lead: en qué etapa está su venta, quién del equipo la lleva (asesor), cuánto vale y los últimos mensajes que se cruzaron por ahí (WhatsApp del CRM).
+- Úsalo como fuente real: si en el CRM ya le mandaron el precio o el link, no lo repitas; si el lead escribió último y nadie le respondió, dilo en alerts. Si quien te pide la sugerencia no es el asesor de esa venta, menciónalo en nextStep.`;
 
 // ─── Llamada común ────────────────────────────────────────────────────────────
 
@@ -469,11 +474,14 @@ export async function recommendReply(input: {
   current: ConversationWithMessages | null;
   previous: ConversationWithMessages[];
   instruction?: string;
+  crm?: CrmDelLead | null;
 }): Promise<{ data: Recommendation; usage: AiUsage }> {
   const sections: string[] = [
     formatNegocio(input.negocio),
     `<ficha_lead>\n${formatClient(input.client, input.totalConversations)}\n</ficha_lead>`,
   ];
+  const crm = formatCrmDelLead(input.crm);
+  if (crm) sections.push(`<crm_del_lead>\n${crm}\n</crm_del_lead>`);
 
   if (input.previous.length) {
     sections.push(
@@ -509,9 +517,103 @@ export async function recommendReply(input: {
   return result;
 }
 
+function formatMensajesCrm(mensajes: MensajeVentaCrm[]): string {
+  return mensajes
+    .map((m) => `${m.de === "cliente" ? "Lead" : "Negocio"}${m.fecha ? ` (${formatDate(new Date(m.fecha))})` : ""}: ${m.texto}`)
+    .join("\n");
+}
+
+function formatVentaCrm(v: VentaCrm): string {
+  return [
+    `Venta: ${v.oportunidad}`,
+    v.pipeline || v.etapa ? `Etapa: ${[v.pipeline, v.etapa].filter(Boolean).join(" → ")}` : "",
+    v.monto ? `Monto: $${v.monto}` : "",
+    v.diasSinMoverse !== null ? `Días sin cambiar de etapa: ${v.diasSinMoverse}` : "",
+    v.ultimoMensaje.de
+      ? `Último mensaje: de ${v.ultimoMensaje.de === "cliente" ? "el lead" : "el negocio"}${v.ultimoMensaje.haceHoras !== null ? `, hace ${v.ultimoMensaje.haceHoras} h` : ""}${v.ultimoMensaje.canal ? ` por ${v.ultimoMensaje.canal}` : ""}`
+      : "",
+    v.esperandoRespuesta ? "OJO: el lead escribió último y nadie le respondió." : "",
+    v.mensajes.length ? `Últimos mensajes en el CRM:\n${formatMensajesCrm(v.mensajes)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatCrmDelLead(crm: CrmDelLead | null | undefined): string {
+  if (!crm || !crm.disponible || !crm.encontrado) return "";
+  return [
+    crm.asesor ? `Asesor a cargo: ${crm.asesor.nombre}` : "Sin asesor asignado en el CRM",
+    crm.venta ? formatVentaCrm(crm.venta) : "",
+    crm.otrasVentas.length
+      ? `Otras ventas de este lead: ${crm.otrasVentas.map((o) => `${o.oportunidad} (${o.estado}${o.etapa ? `, ${o.etapa}` : ""})`).join("; ")}`
+      : "",
+    crm.conversacion?.mensajes.length ? `Últimos mensajes en el CRM:\n${formatMensajesCrm(crm.conversacion.mensajes)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function limpiarRespuesta(text: string): string {
   return text
     .replace(/[¡¿]/g, "")
     .replace(/\*\*?|__|^#+ /gm, "")
     .trim();
+}
+
+// ─── Coach del equipo de ventas (CRM del negocio) ─────────────────────────────
+
+const coachSchema = z.object({
+  resumen: z.string().describe("Cómo va el equipo en 2 o 3 frases, en tono de WhatsApp"),
+  asesores: z.array(
+    z.object({
+      nombre: z.string(),
+      comoVa: z.string().describe("Cómo van sus ventas, en 1 o 2 frases"),
+      alerta: z.string().describe("Lo más urgente que tiene que hacer hoy, o vacío"),
+      ventas: z.array(
+        z.object({
+          contacto: z.string(),
+          situacion: z.string().describe("En qué está esa venta, en una frase"),
+          queEscribir: z.string().describe("El mensaje exacto, listo para copiar y mandarle al lead"),
+        }),
+      ),
+    }),
+  ),
+});
+export type CoachEquipo = z.infer<typeof coachSchema>;
+
+const COACH_SYSTEM = `Eres Lucas, el coach de ventas de un negocio de Ecuador. Lees las ventas abiertas del CRM del negocio, agrupadas por asesor, con los últimos mensajes de cada una, y le dices a cada asesor cómo va y qué escribirle a cada lead para cerrar.
+
+Cómo trabajas:
+- Prioriza: primero los leads que escribieron último y nadie les respondió, después las ventas con monto que llevan días sin moverse, después el resto.
+- Por asesor, elige como mucho 4 ventas: las que más plata o más urgencia tienen.
+- queEscribir es el mensaje real para el lead, tono de WhatsApp ecuatoriano, cálido y directo, sin signos de apertura (¡ ¿), sin markdown y sin sonar a call center. Usa lo que el lead dijo en los mensajes. Si ya está listo para pagar, pídele el pago con los datos de <datos_pago> si existen.
+- No inventes precios ni productos que no estén en la información del negocio.
+- comoVa es honesto: si un asesor deja leads sin responder, dilo con respeto pero claro.
+- Si un asesor no tiene ventas con mensajes, dale igual un consejo concreto con lo que hay (etapa, días sin moverse).`;
+
+function formatAsesorCrm(a: AsesorCrm): string {
+  return [
+    `<asesor nombre="${a.nombre}" ventas_abiertas="${a.ventasAbiertas}" sin_responder="${a.esperandoRespuesta}" monto_abierto="${a.montoAbierto}">`,
+    ...a.ventas.slice(0, 10).map((v) => `<venta contacto="${v.contacto.nombre ?? "sin nombre"}">\n${formatVentaCrm(v)}\n</venta>`),
+    `</asesor>`,
+  ].join("\n");
+}
+
+export async function coachEquipo(input: { negocio: ContextoNegocio; asesores: AsesorCrm[] }): Promise<{ data: CoachEquipo; usage: AiUsage }> {
+  const sections = [
+    formatNegocio(input.negocio),
+    `<equipo>\n${input.asesores.map(formatAsesorCrm).join("\n\n")}\n</equipo>`,
+    `Ahora es ${formatDate(new Date())} (hora de Ecuador).`,
+    "Cómo va cada asesor y qué le escribe cada uno a sus leads?",
+  ];
+  const result = await generarObjeto({
+    system: COACH_SYSTEM,
+    content: [{ type: "text", text: sections.join("\n\n") }],
+    schema: coachSchema,
+    name: "coach_equipo",
+  });
+  for (const a of result.data.asesores) {
+    a.ventas = a.ventas.map((v) => ({ ...v, queEscribir: limpiarRespuesta(v.queEscribir) }));
+  }
+  return result;
 }

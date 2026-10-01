@@ -17,6 +17,9 @@ export interface IOperator {
   // Negocio en el que trabaja. El equipo de Bakano puede cambiarlo con /negocios.
   negocio: Types.ObjectId | null;
   role: OperatorRole;
+  // Correo de Metrics con el que entró. Con él se encuentra a la persona entre
+  // los usuarios del CRM del negocio (sus ventas como asesor).
+  email: string;
   // Cliente con el que se está trabajando: capturas y reenvíos sin cliente claro caen aquí.
   activeClientId: Types.ObjectId | null;
   // Conversaciones anteriores del cliente que se leen al recomendar (0 = solo la actual).
@@ -38,6 +41,7 @@ const operatorSchema = new Schema<IOperator>(
     isActive: { type: Boolean, default: true },
     negocio: { type: Schema.Types.ObjectId, ref: "Negocio", default: null, index: true },
     role: { type: String, enum: OPERATOR_ROLES, default: "vendedor" },
+    email: { type: String, default: "", lowercase: true, trim: true },
     activeClientId: { type: Schema.Types.ObjectId, ref: "Client", default: null },
     contextConversations: { type: Number, default: 10, min: 0, max: 20 },
     businessConnectionId: { type: String, default: "", index: true },

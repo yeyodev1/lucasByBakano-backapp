@@ -6,6 +6,7 @@ import { avisarEquipo } from "./alert.service";
 import { applyCapturedData, ClientDoc, getClientById } from "./client.service";
 import { countConversations, getContext, setConversationSummary } from "./conversation.service";
 import { contextoDeNegocio } from "./negocio.service";
+import { crmDelLead } from "./metrics.service";
 import { OperatorDoc } from "./operator.service";
 import { escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
@@ -94,7 +95,18 @@ export async function recommendForClient(params: {
     contextoDeNegocio(operator.negocio),
     getContext(params.clientId, contextCount),
   ]);
-  const totalConversations = await countConversations(client._id);
+  // Lo que el CRM del negocio sabe de este lead (su venta, su asesor y los
+  // últimos mensajes). Con tope: si Metrics tarda, se recomienda igual.
+  const telefono = client.phones?.[0];
+  const [totalConversations, crm] = await Promise.all([
+    countConversations(client._id),
+    negocio.negocio.workspaceId && telefono
+      ? Promise.race([
+          crmDelLead(String(negocio.negocio.workspaceId), telefono),
+          new Promise<null>((r) => setTimeout(() => r(null), 10_000)),
+        ]).catch(() => null)
+      : Promise.resolve(null),
+  ]);
 
   const { data, usage } = await aiService.recommendReply({
     negocio,
@@ -103,6 +115,7 @@ export async function recommendForClient(params: {
     current: context.current,
     previous: context.previous,
     instruction: params.instruction,
+    crm,
   });
 
   const changes = await applyCapturedData(
