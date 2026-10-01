@@ -501,6 +501,95 @@ export async function guardarVentasEnMetrics(
   }
 }
 
+// ─── CRM del negocio y estado en Metrics (por la API de Metrics) ─────────────
+//
+// El acceso al CRM del cliente lo tiene Metrics (token cifrado o cuenta de
+// agencia): Lucas lo pide con la llave compartida y nunca ve un token.
+
+export interface MensajeVentaCrm {
+  de: "cliente" | "negocio";
+  texto: string;
+  fecha: string | null;
+}
+
+export interface VentaCrm {
+  oportunidad: string;
+  contacto: { nombre: string | null; telefono: string | null };
+  pipeline: string | null;
+  etapa: string | null;
+  monto: number | null;
+  diasSinMoverse: number | null;
+  ultimoMensaje: { de: "cliente" | "negocio" | null; haceHoras: number | null; canal: string | null };
+  esperandoRespuesta: boolean;
+  mensajes: MensajeVentaCrm[];
+}
+
+export interface AsesorCrm {
+  id: string | null;
+  nombre: string;
+  email: string | null;
+  ventasAbiertas: number;
+  montoAbierto: number;
+  esperandoRespuesta: number;
+  ventas: VentaCrm[];
+}
+
+export type VentasCrm =
+  | { disponible: false; motivo: string }
+  | { disponible: true; locationId: string; generadoEn: string; asesores: AsesorCrm[]; truncado: boolean };
+
+export type CrmDelLead =
+  | { disponible: false; motivo: string }
+  | { disponible: true; encontrado: false }
+  | {
+      disponible: true;
+      encontrado: true;
+      contacto: { nombre: string | null };
+      asesor: { nombre: string; email: string | null } | null;
+      venta: VentaCrm | null;
+      otrasVentas: { oportunidad: string; estado: string; etapa: string | null; monto: number | null }[];
+      conversacion: { canal: string; mensajes: MensajeVentaCrm[] } | null;
+    };
+
+/** La foto en vivo del entorno en Metrics (contrato, citas, guiones, CRM...). */
+export interface EstadoEnMetrics {
+  yaEsta: string[];
+  falta: string[];
+  citas: { cita: string; cuando: string; con: string; linkMeet: string | null }[];
+  crm: { conectado: boolean; locationId: string | null };
+  [k: string]: unknown;
+}
+
+async function pedirAMetrics<T>(ruta: string, params: Record<string, unknown> = {}, timeout = 45_000): Promise<T | null> {
+  if (!env.METRICS_SYNC_KEY) return null;
+  try {
+    const r = await axios.get(`${env.METRICS_API_URL}${ruta}`, {
+      headers: { "x-metrics-key": env.METRICS_SYNC_KEY },
+      params,
+      timeout,
+    });
+    return r.data as T;
+  } catch (error: any) {
+    console.error(`[metrics] ${ruta}:`, error?.response?.status ?? error?.message ?? error);
+    return null;
+  }
+}
+
+/** Ventas abiertas del CRM del negocio por asesor. Con `email`, solo las de esa persona. */
+export async function ventasCrm(workspaceId: string, email?: string): Promise<VentasCrm> {
+  const r = await pedirAMetrics<VentasCrm>(`/lucas/crm/${workspaceId}/ventas`, email ? { email } : {});
+  return r ?? { disponible: false, motivo: "No pude hablar con Metrics ahora mismo." };
+}
+
+/** Lo que el CRM del negocio sabe de un lead por su teléfono. */
+export async function crmDelLead(workspaceId: string, telefono: string): Promise<CrmDelLead | null> {
+  return pedirAMetrics<CrmDelLead>(`/lucas/crm/${workspaceId}/contacto`, { telefono }, 20_000);
+}
+
+export async function estadoEnMetrics(workspaceId: string): Promise<EstadoEnMetrics | null> {
+  return pedirAMetrics<EstadoEnMetrics>(`/lucas/estado/${workspaceId}`, {}, 20_000);
+}
+
 /** Entornos cuyo nombre se parece a lo buscado (para dar de alta un negocio). */
 export async function buscarEntornos(
   nombre: string,

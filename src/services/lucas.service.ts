@@ -23,6 +23,7 @@ import {
 } from "./client.service";
 import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.service";
 import { resumenCrm } from "./crm.service";
+import { coachEquipo, coachMisVentas, estadoNegocio } from "./coachCrm.service";
 import { resumenVentas } from "./ventas.service";
 import { atenderSinVincular, elegirEntorno, SIN_ACCESO } from "./vinculacion.service";
 import { PerfilNegocio, buscarEntornos, entornoPorId } from "./metrics.service";
@@ -76,6 +77,9 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversaci�
 <b>Tus clientes</b>
 /calientes: los que están más cerca de comprar
 /ventas: cómo va tu mes (tu facturación en Metrics y lo que puedes cerrar)
+/equipo: cómo va cada asesor en tu CRM y qué le escribe a cada cliente
+/misventas: tus ventas en el CRM y qué escribirle a cada cliente
+/metrics: lo que ya está y lo que falta en Metrics, y tus citas con su link de Meet
 /cliente <i>nombre o teléfono</i>: buscar y elegir
 /nuevo <i>nombre | teléfono</i>: crear
 /ficha · /nota <i>texto</i> · /etapa
@@ -484,6 +488,33 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       const negocioId = await requireNegocio(operator);
       if (!negocioId) return;
       await resumenVentas(chatId, negocioId);
+      return;
+    }
+
+    // ─── CRM del negocio y Metrics ────────────────────────────────────────────
+
+    case "equipo": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      if (operator.role === "vendedor") {
+        await coachMisVentas(operator, negocioId);
+        return;
+      }
+      await coachEquipo(operator, negocioId);
+      return;
+    }
+
+    case "misventas": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      await coachMisVentas(operator, negocioId);
+      return;
+    }
+
+    case "metrics": {
+      const negocioId = await requireNegocio(operator);
+      if (!negocioId) return;
+      await estadoNegocio(operator, negocioId);
       return;
     }
 

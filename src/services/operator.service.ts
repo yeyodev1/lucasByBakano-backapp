@@ -19,7 +19,7 @@ export async function findByBusinessConnection(connectionId: string): Promise<Op
 export async function linkOperator(
   user: TgUser,
   chatId: number,
-  vinculo?: { negocio: Types.ObjectId | null; role: IOperator["role"] },
+  vinculo?: { negocio: Types.ObjectId | null; role: IOperator["role"]; email?: string },
 ): Promise<OperatorDoc> {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ");
   return Operator.findOneAndUpdate(
@@ -31,6 +31,7 @@ export async function linkOperator(
         username: user.username ?? "",
         isActive: true,
         ...(vinculo ? { negocio: vinculo.negocio, role: vinculo.role, activeClientId: null } : {}),
+        ...(vinculo?.email ? { email: vinculo.email.toLowerCase() } : {}),
       },
       $setOnInsert: { contextConversations: env.LUCAS_DEFAULT_CONTEXT },
     },
