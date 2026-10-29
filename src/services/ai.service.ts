@@ -161,6 +161,7 @@ const RECOMMENDATION_SYSTEM = `Eres Lucas, el agente de ventas que Bakano le da 
 Antes de proponer nada lees todo: la información del negocio, sus reglas de venta, sus datos de pago, la ficha del lead, el historial y la conversación actual. Usas lo que ya se sabe; nunca le haces preguntar al lead algo que ya dijo.
 
 Reglas del negocio:
+- Si hay <aprendizajes>, son lecciones de revisiones diarias de conversaciones reales, aprobadas por Bakano: síguelas. Si chocan con <reglas>, mandan las <reglas> del negocio.
 - Las reglas que aparecen en <reglas> se cumplen siempre, sin excepción. Si el lead pide algo que una regla no permite (por ejemplo una proforma por un monto menor al mínimo), la respuesta lo resuelve con amabilidad y le ofrece la alternativa que sí se puede (el precio por el chat, el link de pago, pasar a la tienda) sin sonar a "no se puede".
 - Nunca inventes precios, productos, stock, plazos de entrega, descuentos, facturas, garantías ni promesas que no estén en la información del negocio o en la conversación. Si el lead pide factura o un documento y el negocio no dijo que lo da, no lo prometas: pregúntale qué necesita exactamente y avisa en alerts. Si falta un dato, la respuesta lo deja entre corchetes, por ejemplo [precio], y lo dices en alerts.
 
@@ -424,6 +425,7 @@ function formatNegocio(ctx: ContextoNegocio): string {
   return [
     `<negocio>\n${partes.join("\n")}\n</negocio>`,
     `<reglas>\n${reglas}\n</reglas>`,
+    ...(ctx.aprendizajes?.length ? [`<aprendizajes>\n${ctx.aprendizajes.map((a) => `- ${a}`).join("\n")}\n</aprendizajes>`] : []),
     `<datos_pago>\n${pago}\n</datos_pago>`,
   ].join("\n\n");
 }
@@ -616,4 +618,82 @@ export async function coachEquipo(input: { negocio: ContextoNegocio; asesores: A
     a.ventas = a.ventas.map((v) => ({ ...v, queEscribir: limpiarRespuesta(v.queEscribir) }));
   }
   return result;
+}
+
+// ─── Revisión de fin de día ─────────────────────────────────────────────────
+
+const revisionDiaSchema = z.object({
+  quienAtendio: z.string().describe("Nombre de quien respondió al lead (vendedor o dueño), o 'Nadie' si no se le respondió"),
+  resumen: z.string(),
+  comoAtendio: z.string(),
+  calificacion: z.enum(["bien", "regular", "mal"]),
+  porque: z.string(),
+  debioHacer: z.string().describe("Vacío si estuvo bien"),
+  usoLucas: z.string().describe("Si pidió ayuda a Lucas y si usó lo que propuso; vacío si no hubo sugerencias"),
+});
+export type RevisionDia = z.infer<typeof revisionDiaSchema>;
+
+const REVISION_DIA_SYSTEM = `Revisas al final del día cómo atendió un negocio de Ecuador a un interesado (lead) por WhatsApp. Te pasan la conversación del día (LEAD y NEGOCIO, con el nombre de quien escribió) y, si las hubo, las respuestas que Lucas, el copiloto de ventas, le propuso al vendedor y cuál eligió.
+Evalúa la ATENCIÓN que recibió el lead, no al lead.
+- calificacion: "bien" si se le respondió a tiempo, con lo que pidió y se avanzó hacia la venta; "regular" si hubo demoras, respuestas genéricas o no se aprovechó una señal de compra; "mal" si quedó sin respuesta, se le dio información equivocada, se le trató mal o se perdió una venta que estaba lista.
+- porque: lo que pasó de verdad en el chat. debioHacer: qué hacer distinto, concreto.
+- usoLucas: si el vendedor pidió sugerencias y si usó alguna (la elegida está marcada). Si Lucas propuso algo malo, dilo.
+Usa solo lo que está en la conversación. Español neutro, directo y corto.`;
+
+/** Una conversación del día, evaluada. */
+export async function revisarConversacionDelDia(input: {
+  negocio: string;
+  lead: string;
+  current: ConversationWithMessages;
+  sugerencias: { hora: Date; respuestas: string[]; elegida: number | null }[];
+}): Promise<RevisionDia> {
+  const sugerencias = input.sugerencias.length
+    ? `<sugerencias_de_lucas>\n${input.sugerencias
+        .map(
+          (s) =>
+            `[${formatDate(s.hora)}] ${s.respuestas.map((r, i) => `${i + 1}. ${r}${s.elegida === i ? " (ELEGIDA)" : ""}`).join(" | ")}`,
+        )
+        .join("\n")}\n</sugerencias_de_lucas>`
+    : "Sin sugerencias de Lucas en esta conversación.";
+  const { data } = await generarObjeto({
+    system: REVISION_DIA_SYSTEM,
+    content: [
+      {
+        type: "text",
+        text: [
+          `Negocio: ${input.negocio}. Lead: ${input.lead}.`,
+          formatConversation({ ...input.current, messages: input.current.messages.slice(-80) }, "conversacion"),
+          sugerencias,
+        ].join("\n\n"),
+      },
+    ],
+    schema: revisionDiaSchema,
+    name: "revision_dia",
+  });
+  return data;
+}
+
+const conclusionDiaSchema = z.object({
+  conclusion: z.string(),
+  aprendizajes: z
+    .array(z.object({ regla: z.string(), motivo: z.string(), negocio: z.string() }))
+    .max(3),
+});
+export type ConclusionDia = z.infer<typeof conclusionDiaSchema>;
+
+/** El patrón del día y hasta 3 reglas nuevas para Lucas (no para los vendedores). */
+export async function concluirDia(input: {
+  dia: string;
+  conversaciones: (RevisionDia & { negocio: string; lead: string })[];
+  reglasExistentes: string[];
+}): Promise<ConclusionDia> {
+  const { data } = await generarObjeto({
+    system: `Eres responsable de mejorar a Lucas, el copiloto de ventas de Bakano. Te paso las conversaciones del día que no salieron bien, ya evaluadas, y las reglas que Lucas ya sigue o que ya están propuestas.
+- conclusion: 2 o 3 frases con el patrón del día (qué falló, en qué negocios y por qué). Lo que fue culpa de los vendedores va aquí.
+- aprendizajes: como mucho 3 reglas NUEVAS para Lucas, escritas como instrucción directa ("Cuando el lead pregunte X, propón Y"). Solo lo que Lucas puede hacer mejor al proponer respuestas o alertas; nada que dependa del vendedor. No repitas ni parafrasees reglas existentes. negocio: a qué negocio aplica o "todos".`,
+    content: [{ type: "text", text: JSON.stringify(input) }],
+    schema: conclusionDiaSchema,
+    name: "conclusion_dia",
+  });
+  return data;
 }

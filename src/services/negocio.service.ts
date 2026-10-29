@@ -2,7 +2,7 @@ import crypto from "crypto";
 import { Types } from "mongoose";
 import { CustomError } from "../errors/customError.error";
 import { Negocio, NegocioDoc } from "../models/negocio.model";
-import { PerfilNegocio, guardarVentasEnMetrics, perfilDeEntorno } from "./metrics.service";
+import { PerfilNegocio, aprendizajesAprobados, guardarVentasEnMetrics, perfilDeEntorno } from "./metrics.service";
 
 function nuevoCodigo(nombre: string): string {
   const base = nombre
@@ -120,6 +120,8 @@ function unirConMetrics(negocio: NegocioDoc, perfil: PerfilNegocio | null): Nego
 export interface ContextoNegocio {
   negocio: NegocioDoc;
   perfil: PerfilNegocio | null;
+  /** Reglas que salieron de las revisiones diarias y aprobó Bakano (viven en Metrics). */
+  aprendizajes?: string[];
 }
 
 /** Todo lo que Lucas necesita saber del negocio para recomendar. */
@@ -127,8 +129,11 @@ export async function contextoDeNegocio(id: Types.ObjectId | null): Promise<Cont
   const negocio = await getNegocio(id);
   if (!negocio)
     throw new CustomError("No estás vinculado a ningún negocio. Usa /vincular <código>.", 403);
-  const perfil = negocio.workspaceId ? await perfilDeEntorno(negocio.workspaceId) : null;
-  return { negocio: unirConMetrics(negocio, perfil), perfil };
+  const [perfil, aprendizajes] = await Promise.all([
+    negocio.workspaceId ? perfilDeEntorno(negocio.workspaceId) : Promise.resolve(null),
+    aprendizajesAprobados().catch(() => []),
+  ]);
+  return { negocio: unirConMetrics(negocio, perfil), perfil, aprendizajes };
 }
 
 /** El negocio de un entorno de Metrics; si todavía no existe en Lucas, se crea. */
