@@ -48,8 +48,15 @@ export async function negocioPorEntorno(workspaceId: string): Promise<NegocioDoc
   return Negocio.findOne({ workspaceId, isActive: true }).lean<NegocioDoc>();
 }
 
-export async function listarNegocios(): Promise<NegocioDoc[]> {
-  return Negocio.find({ isActive: true }).sort({ nombre: 1 }).lean<NegocioDoc[]>();
+/**
+ * Negocios activos por nombre, sin importar mayúsculas: sin la collation
+ * "pruebas…" quedaba después de todos los que empiezan en mayúscula.
+ */
+export async function listarNegocios(buscar = ""): Promise<NegocioDoc[]> {
+  const filtro: Record<string, unknown> = { isActive: true };
+  const texto = buscar.trim();
+  if (texto) filtro.nombre = { $regex: texto.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+  return Negocio.find(filtro).collation({ locale: "es", strength: 1 }).sort({ nombre: 1 }).lean<NegocioDoc[]>();
 }
 
 export async function actualizarNegocio(
