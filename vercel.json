@@ -18,6 +18,10 @@
     {
       "path": "/api/cron/lucas",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/revision-diaria",
+      "schedule": "0,15,30,45 2,3 * * *"
     }
   ]
 }
