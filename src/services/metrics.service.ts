@@ -501,6 +501,60 @@ export async function guardarVentasEnMetrics(
   }
 }
 
+// ─── Revisión de fin de día y aprendizajes (viven en Metrics) ────────────────
+//
+// La revisión diaria de Lucas se manda a Metrics, que la guarda y la envía a
+// Dirección por @BakanoAgencyBot y Slack. Las reglas que Dirección aprueba
+// quedan en `aprendizajesbot` (bot: "lucas") y Lucas las lee de ahí.
+
+let cacheAprendizajes: { lista: string[]; en: number } | null = null;
+
+/** Reglas aprobadas para Lucas. Cache de 5 minutos: se leen en cada recomendación. */
+export async function aprendizajesAprobados(): Promise<string[]> {
+  if (!env.METRICS_DB_URI) return [];
+  if (cacheAprendizajes && Date.now() - cacheAprendizajes.en < 5 * 60_000) return cacheAprendizajes.lista;
+  const db = (await conectar()).db!;
+  const docs = await db
+    .collection("aprendizajesbot")
+    .find({ bot: "lucas", estado: "aprobado" }, { projection: { regla: 1 } })
+    .sort({ decididoEn: 1 })
+    .limit(40)
+    .toArray();
+  cacheAprendizajes = { lista: docs.map((d: any) => String(d.regla)), en: Date.now() };
+  return cacheAprendizajes.lista;
+}
+
+/** Reglas ya aprobadas o propuestas, para que la revisión no las repita. */
+export async function aprendizajesVigentes(): Promise<string[]> {
+  if (!env.METRICS_DB_URI) return [];
+  const db = (await conectar()).db!;
+  const docs = await db
+    .collection("aprendizajesbot")
+    .find({ bot: "lucas", estado: { $in: ["aprobado", "propuesto"] } }, { projection: { regla: 1 } })
+    .limit(80)
+    .toArray();
+  return docs.map((d: any) => String(d.regla));
+}
+
+export async function enviarRevisionDiaria(revision: {
+  dia: string;
+  conversaciones: Record<string, unknown>[];
+  conclusion: string;
+  aprendizajes: { regla: string; motivo: string; negocio: string }[];
+}): Promise<boolean> {
+  if (!env.METRICS_SYNC_KEY) return false;
+  try {
+    await axios.post(`${env.METRICS_API_URL}/lucas/revision-diaria`, revision, {
+      headers: { "x-metrics-key": env.METRICS_SYNC_KEY },
+      timeout: 30_000,
+    });
+    return true;
+  } catch (error: any) {
+    console.error("[metrics] revisión diaria:", error?.response?.status ?? error?.message ?? error);
+    return false;
+  }
+}
+
 // ─── CRM del negocio y estado en Metrics (por la API de Metrics) ─────────────
 //
 // El acceso al CRM del cliente lo tiene Metrics (token cifrado o cuenta de
