@@ -91,7 +91,7 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversaci�
 
 const HELP_BAKANO = `\n\n<b>Equipo Bakano</b>
 /alta <i>nombre del negocio</i>: dar de alta a un cliente en Lucas y obtener su código
-/negocios: ver los negocios y entrar a uno para configurarlo o probar
+/negocios <i>nombre</i>: buscar un negocio y entrar a él para configurarlo o probar
 /codigo: código de vinculación del negocio en el que estás
 /cobros: quién le debe a Bakano
 /crm: CRM y WhatsApp conectados de los clientes, y leads que dejaron ir`;
@@ -732,14 +732,21 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
 
     case "negocios": {
       if (!(await requireBakano(operator))) return;
-      const negocios = await listarNegocios();
+      const negocios = await listarNegocios(args);
       if (!negocios.length) {
-        await sendMessage(chatId, "Todavía no hay negocios. Da de alta uno con /alta <nombre>.");
+        await sendMessage(
+          chatId,
+          args
+            ? `Ningún negocio se llama "${escapeHtml(args)}". Prueba con otra parte del nombre o mira todos con /negocios.`
+            : "Todavía no hay negocios. Da de alta uno con /alta <nombre>.",
+        );
         return;
       }
+      // Telegram no muestra más de 40 botones: el resto se encuentra buscando.
+      const cortada = negocios.length > 40 ? `\nTe muestro 40. Si no ves el tuyo, búscalo: <code>/negocios pruebas</code>` : "";
       await sendMessage(
         chatId,
-        `<b>${negocios.length} negocios en Lucas</b>\nToca uno para entrar como equipo Bakano (configurar, probar capturas):`,
+        `<b>${negocios.length} negocios en Lucas</b>\nToca uno para entrar como equipo Bakano (configurar, probar capturas):${cortada}`,
         negocios
           .slice(0, 40)
           .map((n) => [{ text: n.nombre.slice(0, 50), callback_data: `entrar:${n._id}` }]),
