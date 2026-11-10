@@ -60,20 +60,21 @@ export function escapeHtml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function splitMessage(text: string): string[] {
-  if (text.length <= MAX_MESSAGE_LENGTH) return [text];
+export function splitMessage(text: string): string[] {
   const parts: string[] = [];
-  let current = "";
-  // Se corta por párrafos para no partir una etiqueta HTML a la mitad.
-  for (const block of text.split("\n\n")) {
-    if ((current + "\n\n" + block).length > MAX_MESSAGE_LENGTH && current) {
-      parts.push(current);
-      current = block;
-    } else {
-      current = current ? `${current}\n\n${block}` : block;
-    }
+  let rest = text;
+  // Se corta por párrafo, si no por línea, si no por espacio, para no partir etiquetas HTML;
+  // un párrafo largo (p. ej. /reglas) ya no pasa entero del límite.
+  while (rest.length > MAX_MESSAGE_LENGTH) {
+    const window = rest.slice(0, MAX_MESSAGE_LENGTH);
+    let cut = window.lastIndexOf("\n\n");
+    if (cut < MAX_MESSAGE_LENGTH / 2) cut = window.lastIndexOf("\n");
+    if (cut < MAX_MESSAGE_LENGTH / 2) cut = window.lastIndexOf(" ");
+    if (cut <= 0) cut = MAX_MESSAGE_LENGTH;
+    parts.push(rest.slice(0, cut).trimEnd());
+    rest = rest.slice(cut).trimStart();
   }
-  if (current) parts.push(current);
+  if (rest) parts.push(rest);
   return parts;
 }
 

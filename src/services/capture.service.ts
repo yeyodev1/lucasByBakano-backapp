@@ -92,7 +92,7 @@ export async function handleCapture(
     if (!operator.activeClientId) {
       await sendMessage(
         chatId,
-        "No encontré una conversación ahí. Mándame una captura del chat, pégalo como texto, o elige un cliente con /cliente <nombre> y pregúntame.",
+        "No encontré una conversación ahí. Mándame una captura del chat, pégalo como texto, o elige un cliente con /cliente &lt;nombre&gt; y pregúntame.",
       );
       return;
     }
@@ -186,7 +186,7 @@ async function askForClient(
     keyboard.push([{ text: `➕ Crear "${pending.name}"`, callback_data: "capnew" }]);
   const text = candidates.length
     ? `Hay varios clientes que se llaman así. De cuál es esta conversación?`
-    : `Leí ${pending.messages.length} mensajes pero no sé de qué cliente son. Respóndeme con /cliente <nombre o teléfono> o créalo con /nuevo <nombre> y la guardo ahí.`;
+    : `Leí ${pending.messages.length} mensajes pero no sé de qué cliente son. Respóndeme con /cliente &lt;nombre o teléfono&gt; o créalo con /nuevo &lt;nombre&gt; y la guardo ahí.`;
   await sendMessage(operator.telegramChatId, text, keyboard);
 }
 
@@ -267,7 +267,7 @@ export async function handleForward(operator: OperatorDoc, message: TgMessage): 
       if (!operator.activeClientId) {
         await sendMessage(
           operator.telegramChatId,
-          "Ese mensaje es tuyo. Elige primero el cliente con /cliente <nombre>.",
+          "Ese mensaje es tuyo. Elige primero el cliente con /cliente &lt;nombre&gt;.",
         );
         return;
       }
@@ -320,7 +320,7 @@ export async function handleForward(operator: OperatorDoc, message: TgMessage): 
   if (!client) {
     await sendMessage(
       operator.telegramChatId,
-      "No sé de qué cliente es este reenvío. Elige uno con /cliente <nombre> y vuelve a reenviarlo.",
+      "No sé de qué cliente es este reenvío. Elige uno con /cliente &lt;nombre&gt; y vuelve a reenviarlo.",
     );
     return;
   }
