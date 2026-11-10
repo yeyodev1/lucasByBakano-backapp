@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { Types } from "mongoose";
 import { CustomError } from "../errors/customError.error";
-import { Negocio, NegocioDoc } from "../models/negocio.model";
+import { IDocumento, Negocio, NegocioDoc } from "../models/negocio.model";
 import { PerfilNegocio, aprendizajesAprobados, guardarVentasEnMetrics, perfilDeEntorno } from "./metrics.service";
 
 function nuevoCodigo(nombre: string): string {
@@ -81,6 +81,30 @@ export async function agregarRegla(id: Types.ObjectId, regla: string): Promise<s
   await Negocio.updateOne({ _id: id }, { $set: { reglas } });
   await sincronizar(id, { reglasVenta: reglas });
   return reglas;
+}
+
+// shortcut: todos los documentos van enteros en cada pedido a la IA; si un negocio necesita más, buscar por relevancia.
+export const MAX_DOCUMENTOS = 15;
+
+export async function agregarDocumento(id: Types.ObjectId, doc: IDocumento): Promise<number> {
+  const negocio = await Negocio.findOneAndUpdate(
+    { _id: id, [`documentos.${MAX_DOCUMENTOS - 1}`]: { $exists: false } },
+    { $push: { documentos: doc } },
+    { new: true },
+  ).lean<NegocioDoc>();
+  if (!negocio) throw new CustomError(`Ya tengo ${MAX_DOCUMENTOS} documentos. Quita alguno con /documentos.`, 400);
+  return negocio.documentos.length;
+}
+
+export async function quitarDocumento(id: Types.ObjectId, indice: number): Promise<IDocumento[]> {
+  const negocio = await getNegocio(id);
+  const documentos = negocio?.documentos ?? [];
+  if (!Number.isInteger(indice) || indice < 0 || indice >= documentos.length) {
+    throw new CustomError("No encontré ese documento", 404);
+  }
+  const quedan = documentos.filter((_, i) => i !== indice);
+  await Negocio.updateOne({ _id: id }, { $set: { documentos: quedan } });
+  return quedan;
 }
 
 export async function quitarRegla(id: Types.ObjectId, indice: number): Promise<string[]> {

@@ -317,6 +317,58 @@ async function generarObjeto<T>(params: {
 
 // ─── Casos de uso ─────────────────────────────────────────────────────────────
 
+// Lo que se guarda de cada documento va entero en cada pedido: se acota.
+const MAX_CONTENIDO_DOCUMENTO = 6000;
+
+const documentoSchema = z.object({
+  titulo: z.string(),
+  contenido: z.string(),
+});
+
+/** Lee un flyer o PDF del negocio y deja en texto todo lo que sirve para vender. */
+export async function leerDocumento(file: {
+  data: Buffer;
+  mediaType: string;
+}): Promise<{ data: z.infer<typeof documentoSchema>; usage: AiUsage }> {
+  const result = await generarObjeto({
+    system: `Lees un flyer, brochure o PDF de un negocio de Ecuador para que su agente de ventas lo use al responder a interesados.
+- titulo: nombre corto del documento (por ejemplo "Programa Liderazgo 2027" o "Flyer promo diciembre"), máximo 60 caracteres.
+- contenido: toda la información útil para vender, en texto plano y sin markdown: programas o productos, precios, descuentos, fechas, horarios, modalidad, duración, requisitos, beneficios, cupos, formas de pago, contacto y condiciones. Copia cifras y fechas tal cual. No inventes nada que no esté en el documento. Si no tiene información del negocio, deja contenido vacío.`,
+    content: [
+      { type: "file", data: file.data, mediaType: file.mediaType },
+      { type: "text", text: "Extrae la información de este documento." },
+    ],
+    schema: documentoSchema,
+    name: "documento",
+  });
+  result.data.titulo = result.data.titulo.trim().slice(0, 60);
+  result.data.contenido = result.data.contenido.trim().slice(0, MAX_CONTENIDO_DOCUMENTO);
+  return result;
+}
+
+/** Quien vende le pregunta algo a Lucas sin pasarle una conversación. */
+export async function responderConsulta(input: {
+  negocio: ContextoNegocio;
+  pregunta: string;
+  operatorName: string;
+}): Promise<{ data: { respuesta: string }; usage: AiUsage }> {
+  return generarObjeto({
+    system: `Eres Lucas, el copiloto de ventas de un negocio en Ecuador. Te escribe ${input.operatorName || "alguien del equipo"}, que vende por WhatsApp. Respóndele corto, cálido y directo, como un compañero por Telegram.
+- Usa solo lo que está en <negocio>, <documentos>, <reglas> y <datos_pago>. Si te pregunta algo que no está ahí, dile que no lo tienes y que lo cargue con /negocio o mandándome el flyer o PDF.
+- No inventes cifras, cupos, plazos ni urgencias que no estén escritos.
+- Si te saluda o no sabes qué quiere, recuérdale en una frase que le ayudas a cerrar ventas: que te mande la captura del chat con su cliente.
+- Texto plano, sin markdown ni signos de apertura (¡ ¿). Máximo 8 líneas.`,
+    content: [
+      {
+        type: "text",
+        text: `${formatNegocio(input.negocio)}\n\n<pregunta>\n${input.pregunta}\n</pregunta>`,
+      },
+    ],
+    schema: z.object({ respuesta: z.string() }),
+    name: "consulta",
+  });
+}
+
 /** Convierte capturas o texto pegado en mensajes ordenados + datos del cliente. */
 export async function extractConversation(
   input: CaptureInput,
@@ -422,8 +474,12 @@ function formatNegocio(ctx: ContextoNegocio): string {
   const pago =
     negocio.datosPago ||
     "No configurados. Si toca cobrar, deja [datos de pago] y avisa en alerts que falta configurar /pago.";
+  const documentos = (negocio.documentos ?? [])
+    .map((d) => `<documento nombre="${d.nombre}">\n${d.contenido}\n</documento>`)
+    .join("\n");
   return [
     `<negocio>\n${partes.join("\n")}\n</negocio>`,
+    ...(documentos ? [`<documentos>\n${documentos}\n</documentos>`] : []),
     `<reglas>\n${reglas}\n</reglas>`,
     ...(ctx.aprendizajes?.length ? [`<aprendizajes>\n${ctx.aprendizajes.map((a) => `- ${a}`).join("\n")}\n</aprendizajes>`] : []),
     `<datos_pago>\n${pago}\n</datos_pago>`,

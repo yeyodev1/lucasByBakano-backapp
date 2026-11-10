@@ -27,12 +27,14 @@ export const BOT_COMMANDS = [
   { command: "pago", description: "Tus datos de pago" },
   { command: "regla", description: "Una regla que siempre respeto" },
   { command: "reglas", description: "Ver y quitar reglas" },
+  { command: "documentos", description: "Flyers y PDFs que conozco de tu negocio" },
   { command: "nota", description: "Nota en la ficha del cliente" },
   { command: "etapa", description: "Cambiar la etapa del cliente" },
   { command: "contexto", description: "Conversaciones anteriores a leer" },
   { command: "alertas", description: "Cuándo y dónde te aviso" },
   { command: "soltar", description: "Dejar el cliente activo" },
   { command: "ayuda", description: "Cómo usar a Lucas" },
+  { command: "salir", description: "Cerrar sesión para entrar con otra cuenta" },
 ];
 
 function apiUrl(method: string): string {
@@ -96,6 +98,14 @@ export async function sendMessage(
     });
   }
   return last;
+}
+
+/** Reenvía un flyer o PDF guardado usando el file_id que ya tiene Telegram. */
+export async function sendFile(chatId: number, tipo: "pdf" | "imagen", fileId: string): Promise<void> {
+  await callTelegram(tipo === "pdf" ? "sendDocument" : "sendPhoto", {
+    chat_id: chatId,
+    [tipo === "pdf" ? "document" : "photo"]: fileId,
+  });
 }
 
 export async function sendTyping(chatId: number): Promise<void> {
