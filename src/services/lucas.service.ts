@@ -291,7 +291,9 @@ async function handlePrivateMessage(message: TgMessage): Promise<void> {
   // El chat puede cambiar si reinstaló Telegram.
   if (operator.telegramChatId !== chatId) operator = await linkOperator(from, chatId);
   if (!(await tieneAcceso(operator))) {
-    await sendMessage(chatId, SIN_ACCESO);
+    // Su entorno pudo borrarse o cambiar en Metrics: se le revincula con su cuenta actual
+    // (si ya no tiene ningún entorno activo, ahí mismo recibe SIN_ACCESO).
+    await atenderSinVincular(message);
     return;
   }
 
