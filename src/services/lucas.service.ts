@@ -25,7 +25,8 @@ import { enviarLinkDePago, listarDeudores, pedirLinkDePago } from "./cobros.serv
 import { resumenCrm } from "./crm.service";
 import { coachEquipo, coachMisVentas, estadoNegocio } from "./coachCrm.service";
 import { resumenVentas } from "./ventas.service";
-import { atenderSinVincular, elegirEntorno, SIN_ACCESO } from "./vinculacion.service";
+import { atenderSinVincular, cerrarSesion, elegirEntorno, SIN_ACCESO } from "./vinculacion.service";
+import { archivoDeMensaje, guardarDocumento, mostrarDocumentos } from "./documento.service";
 import { PerfilNegocio, buscarEntornos, entornoPorId } from "./metrics.service";
 import {
   actualizarNegocio,
@@ -35,6 +36,7 @@ import {
   getNegocio,
   listarNegocios,
   negocioPorCodigo,
+  quitarDocumento,
   quitarRegla,
 } from "./negocio.service";
 import {
@@ -54,7 +56,7 @@ import {
   stageLabel,
   temperaturaLabel,
 } from "./recommendation.service";
-import { answerCallback, escapeHtml, removeKeyboard, sendMessage } from "./telegram.service";
+import { answerCallback, escapeHtml, removeKeyboard, sendFile, sendMessage } from "./telegram.service";
 
 const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversación con tu cliente y te digo qué responderle para cerrar la venta, qué tan cerca estás y cuándo mandarle el pago.
 
@@ -73,6 +75,7 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversaci�
 /pago <i>texto</i>: tus datos de pago (cuentas, link, Payphone, De Una…)
 /regla <i>texto</i>: una regla que siempre respeto, por ejemplo <i>no se envían proformas para montos menores a $500</i>
 /reglas: ver y quitar reglas
+📄 Mándame el <b>PDF</b> o el <b>flyer</b> de tus programas y lo uso para responder. /documentos: verlos, reenviarlos o quitarlos
 
 <b>Tus clientes</b>
 /calientes: los que están más cerca de comprar
@@ -87,7 +90,9 @@ const HELP = `Soy <b>Lucas</b> 🧠, tu agente de ventas. Pásame la conversaci�
 /contexto <i>n</i>: cuántas conversaciones anteriores leo por defecto
 /soltar: dejar el cliente activo
 
-/alertas: cuándo te aviso (clientes sin respuesta, ventas que se escapan, mala atención). Agrégame a un grupo de tu equipo y escribe ahí /alertasaqui`;
+/alertas: cuándo te aviso (clientes sin respuesta, ventas que se escapan, mala atención). Agrégame a un grupo de tu equipo y escribe ahí /alertasaqui
+
+/salir: cerrar sesión para entrar con otra cuenta`;
 
 const HELP_BAKANO = `\n\n<b>Equipo Bakano</b>
 /alta <i>nombre del negocio</i>: dar de alta a un cliente en Lucas y obtener su código
@@ -308,6 +313,12 @@ async function handlePrivateMessage(message: TgMessage): Promise<void> {
         ? "Para probar capturas entra primero a un negocio con /negocios."
         : "No estás vinculado a ningún negocio. Usa /vincular <código>.",
     );
+    return;
+  }
+  // Un PDF nunca es una captura de chat: va directo a lo que Lucas sabe del negocio.
+  const archivo = archivoDeMensaje(message);
+  if (archivo?.tipo === "pdf") {
+    if (await puedeConfigurar(operator)) await guardarDocumento(operator, archivo);
     return;
   }
   if (message.forward_origin) {
@@ -592,6 +603,14 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await sendMessage(chatId, "Listo, sin cliente activo.");
       return;
 
+    case "salir":
+      await sendMessage(
+        chatId,
+        "¿Cerrar sesión en Lucas? Tus clientes y tu configuración se quedan guardados en tu negocio. Para volver a entrar te pediré tu correo de metrics.bakano.ec.",
+        [[{ text: "🚪 Sí, cerrar sesión", callback_data: "salir:si" }]],
+      );
+      return;
+
     // ─── Configuración del negocio ───────────────────────────────────────────
 
     case "negocio": {
@@ -684,6 +703,11 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       );
       return;
     }
+
+    case "documentos":
+      if (!(await requireNegocio(operator))) return;
+      await mostrarDocumentos(operator);
+      return;
 
     case "alertas":
       await sendMessage(
@@ -915,6 +939,52 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
           operator.telegramChatId,
           `✅ <b>${escapeHtml(client.name)}</b> ahora está en <b>${stageLabel(value)}</b>.`,
         );
+        return;
+      }
+      case "salir": {
+        await cerrarSesion(operator.telegramUserId);
+        await answerCallback(query.id, "Sesión cerrada");
+        if (source) await removeKeyboard(source.chat.id, source.message_id);
+        await sendMessage(
+          operator.telegramChatId,
+          "🚪 Cerraste sesión. Para entrar de nuevo (con esta u otra cuenta), escríbeme el correo con el que entras a <b>metrics.bakano.ec</b>.",
+        );
+        return;
+      }
+      case "gdoc": {
+        await answerCallback(query.id);
+        if (source) await removeKeyboard(source.chat.id, source.message_id);
+        let pendiente: any = null;
+        try {
+          pendiente = JSON.parse(operator.pendingAction || "{}");
+        } catch {}
+        if (pendiente?.kind !== "doc" || !pendiente.archivo) {
+          await sendMessage(operator.telegramChatId, "Ya no tengo ese archivo a mano. Mándamelo de nuevo 🙏");
+          return;
+        }
+        await updateOperator(operator._id, { pendingAction: "" });
+        if (await puedeConfigurar(operator)) await guardarDocumento(operator, pendiente.archivo);
+        return;
+      }
+      case "vdoc": {
+        await answerCallback(query.id);
+        const doc = (await getNegocio(operator.negocio))?.documentos?.[Number(value)];
+        if (!doc) {
+          await sendMessage(operator.telegramChatId, "Ese documento ya no está. Mira /documentos.");
+          return;
+        }
+        await sendFile(operator.telegramChatId, doc.tipo, doc.fileId);
+        return;
+      }
+      case "qdoc": {
+        if (operator.role === "vendedor" || !operator.negocio) {
+          await answerCallback(query.id, "Eso lo configura el dueño del negocio");
+          return;
+        }
+        await quitarDocumento(operator.negocio, Number(value));
+        await answerCallback(query.id, "Documento quitado");
+        if (source) await removeKeyboard(source.chat.id, source.message_id);
+        await mostrarDocumentos(operator);
         return;
       }
       case "qregla": {

@@ -16,6 +16,8 @@ export interface IVinculacion {
   entornos: { id: string; nombre: string; rol: string }[];
   esEquipo: boolean;
   verificado: boolean;
+  // Cerró sesión con /salir: no se le reconoce por Telegram hasta que verifique un correo.
+  salio: boolean;
 }
 
 const vinculacionSchema = new Schema<IVinculacion>(
@@ -30,6 +32,7 @@ const vinculacionSchema = new Schema<IVinculacion>(
     entornos: { type: [{ id: String, nombre: String, rol: String, _id: false }], default: [] },
     esEquipo: { type: Boolean, default: false },
     verificado: { type: Boolean, default: false },
+    salio: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

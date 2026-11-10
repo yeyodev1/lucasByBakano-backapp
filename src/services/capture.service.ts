@@ -6,6 +6,8 @@ import * as aiService from "./ai.service";
 import { ClientDoc, ClientIdentity, getClientById, resolveClient } from "./client.service";
 import { avisarEquipo } from "./alert.service";
 import { appendMessages, getContext, IncomingMessage } from "./conversation.service";
+import { archivoDeMensaje } from "./documento.service";
+import { contextoDeNegocio } from "./negocio.service";
 import { OperatorDoc, updateOperator } from "./operator.service";
 import { recommendForClient } from "./recommendation.service";
 import { downloadFile, escapeHtml, sendMessage, sendTyping } from "./telegram.service";
@@ -90,6 +92,31 @@ export async function handleCapture(
   // Sin conversación: el operador está preguntando algo del cliente activo.
   if (!data.isConversation || !data.messages.length) {
     if (!operator.activeClientId) {
+      const archivo = archivoDeMensaje(message);
+      if (archivo) {
+        // Lo normal es que sea un flyer del negocio: se ofrece guardarlo como conocimiento.
+        if (operator.role === "vendedor") {
+          await sendMessage(chatId, "Eso no es un chat 🤔 Si es un flyer del negocio, pídele al dueño que me lo mande para aprenderlo.");
+          return;
+        }
+        await updateOperator(operator._id, { pendingAction: JSON.stringify({ kind: "doc", archivo }) });
+        await sendMessage(
+          chatId,
+          "Eso no es un chat con un cliente. ¿Es un flyer o información de tu negocio? Lo guardo y lo uso para responder 👇",
+          [[{ text: "📚 Sí, guárdalo", callback_data: "gdoc:si" }]],
+        );
+        return;
+      }
+      const pregunta = instruction || pastedText || "";
+      if (pregunta) {
+        const { data: respuesta } = await aiService.responderConsulta({
+          negocio: await contextoDeNegocio(operator.negocio),
+          pregunta,
+          operatorName: operator.name,
+        });
+        await sendMessage(chatId, escapeHtml(respuesta.respuesta));
+        return;
+      }
       await sendMessage(
         chatId,
         "No encontré una conversación ahí. Mándame una captura del chat, pégalo como texto, o elige un cliente con /cliente &lt;nombre&gt; y pregúntame.",

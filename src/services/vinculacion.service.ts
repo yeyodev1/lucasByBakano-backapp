@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { Operator } from "../models/operator.model";
 import { IVinculacion, Vinculacion } from "../models/vinculacion.model";
 import { TgMessage, TgUser } from "../types/telegram";
 import { codeBlock, layout, sendEmail } from "./email.service";
@@ -114,8 +115,11 @@ export async function atenderSinVincular(message: TgMessage): Promise<OperatorDo
   const chatId = message.chat.id;
   const texto = message.text?.trim() ?? "";
 
-  // 1. Ya verificó su correo en @BakanoAgencyBot: se le reconoce sin preguntar.
-  const porTelegram = await usuarioPorTelegram(from.id);
+  const pendiente = await Vinculacion.findOne({ telegramUserId: from.id }).lean<IVinculacion>();
+
+  // 1. Ya verificó su correo en @BakanoAgencyBot: se le reconoce sin preguntar
+  // (salvo que haya cerrado sesión para entrar con otra cuenta).
+  const porTelegram = pendiente?.salio ? null : await usuarioPorTelegram(from.id);
   if (porTelegram) {
     await Vinculacion.updateOne(
       { telegramUserId: from.id },
@@ -133,8 +137,6 @@ export async function atenderSinVincular(message: TgMessage): Promise<OperatorDo
     );
     return vincularUsuario(message, porTelegram);
   }
-
-  const pendiente = await Vinculacion.findOne({ telegramUserId: from.id }).lean<IVinculacion>();
 
   // 2. Está escribiendo el código que le llegó al correo.
   if (pendiente?.codigoHash && /^\d{6}$/.test(texto.replace(/\s/g, ""))) {
@@ -162,7 +164,7 @@ export async function atenderSinVincular(message: TgMessage): Promise<OperatorDo
     }
     await Vinculacion.updateOne(
       { telegramUserId: from.id },
-      { $set: { verificado: true, codigoHash: "", intentos: 0 } },
+      { $set: { verificado: true, codigoHash: "", intentos: 0, salio: false } },
     );
     return vincularUsuario(message, {
       userId: pendiente.metricsUserId,
@@ -246,6 +248,22 @@ export async function atenderSinVincular(message: TgMessage): Promise<OperatorDo
       : PEDIR_CORREO(from),
   );
   return null;
+}
+
+/**
+ * /salir: la persona deja de usar Lucas en este Telegram. Su historial queda en
+ * el negocio; para volver a entrar verifica un correo de Metrics (el mismo u otro).
+ */
+export async function cerrarSesion(telegramUserId: number): Promise<void> {
+  await Operator.updateOne(
+    { telegramUserId },
+    { $set: { isActive: false, activeClientId: null, pendingAction: "" } },
+  );
+  await Vinculacion.updateOne(
+    { telegramUserId },
+    { $set: { salio: true, verificado: false, codigoHash: "", entornos: [] } },
+    { upsert: true },
+  );
 }
 
 /** Botón para elegir negocio cuando la persona tiene varios en Metrics. */
