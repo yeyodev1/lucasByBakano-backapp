@@ -242,7 +242,7 @@ async function vincular(message: TgMessage, codigo: string): Promise<OperatorDoc
     const operator = await linkOperator(from, chatId, { negocio: null, role: "bakano" });
     await sendMessage(
       chatId,
-      `✅ Listo, ${escapeHtml(from.first_name)}. Entraste como equipo de Bakano.\n\nDa de alta a un cliente con /alta <nombre> o entra a uno con /negocios.${HELP_BAKANO}`,
+      `✅ Listo, ${escapeHtml(from.first_name)}. Entraste como equipo de Bakano.\n\nDa de alta a un cliente con /alta &lt;nombre&gt; o entra a uno con /negocios.${HELP_BAKANO}`,
     );
     return operator;
   }
@@ -342,7 +342,7 @@ async function requireActiveClient(operator: OperatorDoc): Promise<Types.ObjectI
   if (operator.activeClientId) return operator.activeClientId;
   await sendMessage(
     operator.telegramChatId,
-    "Primero elige un cliente con /cliente <nombre o teléfono>.",
+    "Primero elige un cliente con /cliente &lt;nombre o teléfono&gt;.",
   );
   return null;
 }
@@ -607,7 +607,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
         await sendMessage(
           chatId,
           partes.length
-            ? `${partes.join("\n\n")}\n\n${negocio.info ? "Para reemplazar tus precios y condiciones" : "Cuéntame solo lo que falta: precios, cómo entregas, horarios, zonas y garantías"}: /negocio <texto completo>\n\nTodo lo que me cuentes queda también en tu perfil de Metrics.`
+            ? `${partes.join("\n\n")}\n\n${negocio.info ? "Para reemplazar tus precios y condiciones" : "Cuéntame solo lo que falta: precios, cómo entregas, horarios, zonas y garantías"}: /negocio &lt;texto completo&gt;\n\nTodo lo que me cuentes queda también en tu perfil de Metrics.`
             : "Cuéntame de tu negocio en un solo mensaje: qué vendes, precios, cómo entregas, horarios, zonas, garantías y cualquier condición. Ej:\n<code>/negocio Vendemos tortas personalizadas desde $25, entregas en Cuenca de martes a sábado, pedidos con 2 días de anticipación…</code>\n\nMientras no lo tenga, no afirmo precios.",
         );
         return;
@@ -629,7 +629,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
         await sendMessage(
           chatId,
           negocio.datosPago
-            ? `<b>Tus datos de pago:</b>\n\n<code>${escapeHtml(negocio.datosPago)}</code>\n\nPara cambiarlos: /pago <texto completo>`
+            ? `<b>Tus datos de pago:</b>\n\n<code>${escapeHtml(negocio.datosPago)}</code>\n\nPara cambiarlos: /pago &lt;texto completo&gt;`
             : "Mándame tus datos de pago tal como se los mandas a tus clientes. Ej:\n<code>/pago Transferencia Banco Pichincha, cta. corriente 2201234567, a nombre de Dulce Hogar, RUC 0102030405001. También aceptamos De Una al 0991234567.</code>",
         );
         return;
@@ -668,7 +668,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       const { negocio } = await contextoDeNegocio(negocioId);
       const reglas = negocio.reglas;
       if (!reglas.length) {
-        await sendMessage(chatId, "Todavía no tienes reglas. Agrega una con /regla <texto>.");
+        await sendMessage(chatId, "Todavía no tienes reglas. Agrega una con /regla &lt;texto&gt;.");
         return;
       }
       const keyboard: TgInlineKeyboard =
@@ -738,7 +738,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
           chatId,
           args
             ? `Ningún negocio se llama "${escapeHtml(args)}". Prueba con otra parte del nombre o mira todos con /negocios.`
-            : "Todavía no hay negocios. Da de alta uno con /alta <nombre>.",
+            : "Todavía no hay negocios. Da de alta uno con /alta &lt;nombre&gt;.",
         );
         return;
       }
@@ -815,7 +815,7 @@ async function darDeAlta(operator: OperatorDoc, workspaceId: string): Promise<vo
   if (!nombre) {
     await sendMessage(
       operator.telegramChatId,
-      "Esa alta ya no está pendiente. Vuelve a escribir /alta <nombre>.",
+      "Esa alta ya no está pendiente. Vuelve a escribir /alta &lt;nombre&gt;.",
     );
     return;
   }
