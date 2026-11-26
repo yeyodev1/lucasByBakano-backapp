@@ -1,5 +1,6 @@
 import { Types } from "mongoose";
 import { CustomError } from "../errors/customError.error";
+import { AlbumCaptura, IAlbumCaptura } from "../models/albumCaptura.model";
 import { Message } from "../models/message.model";
 import { TgInlineKeyboard, TgMessage } from "../types/telegram";
 import * as aiService from "./ai.service";
@@ -59,6 +60,44 @@ function clientKeyboard(clients: ClientDoc[], action: string): TgInlineKeyboard 
   ]);
 }
 
+// Telegram manda las fotos de un álbum casi a la vez; esto es lo que espera la primera.
+const ESPERA_ALBUM_MS = 3000;
+
+/**
+ * Junta las fotos de un álbum. Devuelve todas en orden a la primera foto que
+ * llegó y null a las demás, que solo se suman. Una foto que llega después de la
+ * espera (o en polling local, que procesa en serie) se procesa sola.
+ */
+async function juntarAlbum(
+  message: TgMessage,
+  fileId: string,
+): Promise<{ fileIds: string[]; caption: string } | null> {
+  const mediaGroupId = `${message.chat.id}:${message.media_group_id}`;
+  const foto = { messageId: message.message_id, fileId, caption: message.caption ?? "" };
+  try {
+    await AlbumCaptura.create({ mediaGroupId, fotos: [foto] });
+  } catch (error: any) {
+    if (error?.code !== 11000) throw error;
+    const sumada = await AlbumCaptura.updateOne(
+      { mediaGroupId, procesado: false },
+      { $push: { fotos: foto } },
+    );
+    if (sumada.modifiedCount) return null;
+    return { fileIds: [fileId], caption: foto.caption };
+  }
+  await new Promise((resolve) => setTimeout(resolve, ESPERA_ALBUM_MS));
+  const album = await AlbumCaptura.findOneAndUpdate(
+    { mediaGroupId },
+    { $set: { procesado: true } },
+    { new: true },
+  ).lean<IAlbumCaptura>();
+  const fotos = [...(album?.fotos ?? [foto])].sort((a, b) => a.messageId - b.messageId);
+  return {
+    fileIds: fotos.map((f) => f.fileId),
+    caption: fotos.map((f) => f.caption).filter(Boolean).join("\n"),
+  };
+}
+
 /**
  * Captura de pantalla o conversación pegada: la IA la transcribe, se ubica al
  * cliente (o se crea), se guarda en el historial y se recomienda qué decir.
@@ -69,21 +108,32 @@ export async function handleCapture(
   pastedText?: string,
 ): Promise<void> {
   const chatId = operator.telegramChatId;
-  await sendTyping(chatId);
 
-  const images: aiService.CaptureInput["images"] = [];
   const photo = message.photo?.at(-1);
   const imageDocument = message.document?.mime_type?.startsWith("image/") ? message.document : null;
   const fileId = photo?.file_id ?? imageDocument?.file_id;
-  if (fileId) {
-    const file = await downloadFile(fileId);
-    images.push({ data: file.data, mediaType: mediaTypeFromPath(file.path) });
+  let fileIds = fileId ? [fileId] : [];
+  let hint = message.caption;
+  if (fileId && message.media_group_id) {
+    const album = await juntarAlbum(message, fileId);
+    // Otra foto del álbum lo procesa todo junto.
+    if (!album) return;
+    fileIds = album.fileIds;
+    hint = album.caption || undefined;
   }
+
+  await sendTyping(chatId);
+  const images: aiService.CaptureInput["images"] = await Promise.all(
+    fileIds.map(async (id) => {
+      const file = await downloadFile(id);
+      return { data: file.data, mediaType: mediaTypeFromPath(file.path) };
+    }),
+  );
 
   const { data } = await aiService.extractConversation({
     images,
     text: pastedText,
-    hint: message.caption,
+    hint,
     operatorName: operator.name,
   });
 

@@ -60,9 +60,17 @@ export async function appendMessages(params: {
     });
   }
 
+  // Capturas repetidas o que se enciman no traen id de Telegram: lo que ya está
+  // en esta conversación (mismo remitente y texto) no se vuelve a guardar.
+  const existentes = await Message.find({ conversation: conversation._id })
+    .select("sender text")
+    .lean<{ sender: string; text: string }[]>();
+  const yaGuardados = new Set(existentes.map((m) => `${m.sender}|${m.text}`));
+
   let saved = 0;
   let lastAt = conversation.lastMessageAt;
   for (const m of valid) {
+    if (!m.telegramMessageKey && yaGuardados.has(`${m.sender}|${m.text.trim()}`)) continue;
     const sentAt = m.sentAt ?? new Date();
     try {
       await Message.create({

@@ -128,7 +128,9 @@ async function tieneAcceso(operator: OperatorDoc): Promise<boolean> {
     // Si Metrics no responde, no se le corta el servicio al cliente por un error nuestro.
     ok = entorno === undefined ? true : Boolean(entorno?.activo);
   }
-  accesoCache.set(clave, { ok, hasta: Date.now() + ACCESO_CACHE_MS });
+  // Solo se cachea el sí: un cliente que se reactiva entra en su siguiente mensaje,
+  // en vez de quedarse 10 min recibiendo la bienvenida en bucle.
+  if (ok) accesoCache.set(clave, { ok, hasta: Date.now() + ACCESO_CACHE_MS });
   return ok;
 }
 
