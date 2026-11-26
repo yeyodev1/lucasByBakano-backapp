@@ -177,3 +177,21 @@ export async function negocioDeEntorno(
   if (existente) return existente;
   return crearNegocio({ nombre, workspaceId, creadoPor });
 }
+
+/**
+ * Después de guardar algo de la configuración: qué conviene llenar o hacer
+ * ahora, en el orden en que más ayuda a recomendar bien.
+ */
+export async function siguientePaso(id: Types.ObjectId | null): Promise<string> {
+  const negocio = await getNegocio(id);
+  if (!negocio) return "";
+  if (!negocio.info)
+    return "👉 Ahora cuéntame qué vendes y tus precios con /negocio. Sin eso no afirmo precios.";
+  if (!negocio.datosPago)
+    return "👉 Sigue con /pago: tus datos de pago, para darte el mensaje de cobro listo cuando un cliente quiera pagar.";
+  if (!negocio.reglas.length)
+    return "👉 Si tienes reglas de venta (desde qué monto das proforma, si haces descuentos, zonas de entrega), mándamelas con /regla.";
+  if (!negocio.documentos?.length)
+    return "👉 Mándame el PDF o el flyer de tus productos o promos y lo uso para responder a tus clientes.";
+  return "🚀 Ya tengo todo para empezar: mándame una captura de un chat con un cliente y te digo qué responderle.";
+}

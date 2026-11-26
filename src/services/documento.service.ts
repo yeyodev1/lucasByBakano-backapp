@@ -1,7 +1,7 @@
 import { CustomError } from "../errors/customError.error";
 import { TgInlineKeyboard, TgMessage } from "../types/telegram";
 import { leerDocumento } from "./ai.service";
-import { agregarDocumento, getNegocio } from "./negocio.service";
+import { agregarDocumento, getNegocio, siguientePaso } from "./negocio.service";
 import { OperatorDoc } from "./operator.service";
 import { downloadFile, escapeHtml, sendMessage, sendTyping } from "./telegram.service";
 
@@ -66,7 +66,7 @@ export async function guardarDocumento(operator: OperatorDoc, archivo: Archivo):
   const vistazo = data.contenido.length > 500 ? `${data.contenido.slice(0, 500)}…` : data.contenido;
   await sendMessage(
     chatId,
-    `✅ Guardé <b>${escapeHtml(nombre)}</b>. Ya lo uso al recomendarte respuestas y puedes preguntarme por él.\n\n<i>${escapeHtml(vistazo)}</i>\n\nTengo ${total} documento${total === 1 ? "" : "s"}: míralos con /documentos.`,
+    `✅ Guardé <b>${escapeHtml(nombre)}</b>. Ya lo uso al recomendarte respuestas y puedes preguntarme por él.\n\n<i>${escapeHtml(vistazo)}</i>\n\nTengo ${total} documento${total === 1 ? "" : "s"}: míralos con /documentos.\n\n${await siguientePaso(operator.negocio)}`,
   );
 }
 
