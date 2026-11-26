@@ -38,6 +38,7 @@ import {
   negocioPorCodigo,
   quitarDocumento,
   quitarRegla,
+  siguientePaso,
 } from "./negocio.service";
 import {
   findByBusinessConnection,
@@ -639,7 +640,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await actualizarNegocio(negocioId, { info: args });
       await sendMessage(
         chatId,
-        `✅ Guardado. Desde ahora recomiendo con esta información${negocio.workspaceId ? " y quedó también en tu perfil de Metrics" : ""}.`,
+        `✅ Guardado. Desde ahora recomiendo con esta información${negocio.workspaceId ? " y quedó también en tu perfil de Metrics" : ""}.\n\n${await siguientePaso(negocioId)}`,
       );
       return;
     }
@@ -661,7 +662,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       await actualizarNegocio(negocioId, { datosPago: args });
       await sendMessage(
         chatId,
-        `✅ Guardado${negocio.workspaceId ? " aquí y en tu perfil de Metrics" : ""}. Cuando un cliente esté listo para pagar, te doy el mensaje con estos datos.`,
+        `✅ Guardado${negocio.workspaceId ? " aquí y en tu perfil de Metrics" : ""}. Cuando un cliente esté listo para pagar, te doy el mensaje con estos datos.\n\n${await siguientePaso(negocioId)}`,
       );
       return;
     }
@@ -680,7 +681,7 @@ async function handleCommand(operator: OperatorDoc, command: string, args: strin
       const reglas = await agregarRegla(negocioId, args);
       await sendMessage(
         chatId,
-        `✅ Regla guardada. Ahora tengo ${reglas.length} regla${reglas.length === 1 ? "" : "s"}. Míralas con /reglas.`,
+        `✅ Regla guardada. Ahora tengo ${reglas.length} regla${reglas.length === 1 ? "" : "s"}. Míralas con /reglas.\n\n${await siguientePaso(negocioId)}`,
       );
       return;
     }
