@@ -61,6 +61,11 @@ async function vincularAEntorno(
   const entorno = usuario.entornos.find((e) => e.id === entornoId);
   if (!entorno) return null;
   const negocio = await negocioDeEntorno(entorno.id, entorno.nombre, usuario.nombre);
+  // Negocio apagado en Lucas: vincularlo daría la bienvenida en cada mensaje sin dejarlo entrar.
+  if (!negocio.isActive) {
+    await sendMessage(message.chat.id, SIN_ACCESO);
+    return null;
+  }
   const role = entorno.rol === "admin" ? "dueno" : "vendedor";
   const operator = await linkOperator(message.from!, message.chat.id, {
     negocio: negocio._id,
